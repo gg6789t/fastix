@@ -57,6 +57,29 @@ static void test_init_errors(void)
     CHECK(ring_init(&hdr, 64, 0, 0) == -FASTIX_EINVAL);
 }
 
+/* A peer that corrupts head/tail must not make the ring copy outside its buffer. */
+static void test_corrupt_counters(void)
+{
+    uint32_t seed = 0, op = 0;
+    static _Alignas(64) uint8_t mem[FASTIX_RING_DATA_OFFSET + 64];
+    struct fastix_ring_hdr *r = (struct fastix_ring_hdr *)(void *)mem;
+    uint8_t buf[256];
+    bool notify;
+
+    CHECK(ring_init(r, 64, 1, 0) == 0);
+    atomic_store(&r->head, 1000); /* 1000 bytes "available" in a 64-byte ring */
+    CHECK(ring_read(r, buf, sizeof(buf), &notify) == -FASTIX_EIO);
+    CHECK(ring_write(r, buf, 8, false, &notify) == -FASTIX_EIO);
+    atomic_store(&r->head, 0);
+    atomic_store(&r->tail, 5); /* tail ahead of head: wraps to a huge distance */
+    CHECK(ring_read(r, buf, sizeof(buf), &notify) == -FASTIX_EIO);
+    CHECK(ring_write(r, buf, 8, false, &notify) == -FASTIX_EIO);
+    atomic_store(&r->tail, 0);
+    atomic_store(&r->closed_write, 1);
+    atomic_store(&r->head, 999);
+    CHECK(ring_read(r, buf, sizeof(buf), &notify) == -FASTIX_EIO);
+}
+
 static uint32_t rng_below(uint64_t *rng, uint32_t bound)
 {
     return (uint32_t)(rng_next(rng) % bound);
@@ -205,6 +228,7 @@ static void run_seed(uint32_t seed)
 int main(void)
 {
     test_init_errors();
+    test_corrupt_counters();
     for (uint32_t seed = 1; seed <= SEEDS; seed++) {
         run_seed(seed);
     }

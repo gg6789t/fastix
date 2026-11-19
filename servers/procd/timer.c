@@ -18,6 +18,7 @@
 #include "heap.h"
 #include "kobj.h"
 #include "signal.h"
+#include "ticker.h"
 #include "timer.h"
 #include "vdso.h"
 
@@ -25,7 +26,9 @@
 #define TICKER_BUDGET_US 200u
 #define TICKER_PRIO      (FASTIX_DEFAULT_PRIO + 1)
 
-extern void arch_ticker_entry(void);
+#define TICKER_STACK_BYTES 4096
+
+static uint64_t ticker_stack[TICKER_STACK_BYTES / sizeof(uint64_t)] __attribute__((aligned(16)));
 
 struct posix_timer {
     struct list_node link; /* in proc->posix_timers */
@@ -126,7 +129,9 @@ int timer_module_init(seL4_CPtr sched_control)
         return err;
     }
     seL4_UserContext regs;
-    arch_regs_init_entry(&regs, (uint64_t)(uintptr_t)&arch_ticker_entry, 0, timer_ntfn_badged);
+    arch_regs_init_entry(&regs, (uint64_t)(uintptr_t)&ticker_main,
+                         (uint64_t)(uintptr_t)(ticker_stack + sizeof(ticker_stack) / sizeof(ticker_stack[0])),
+                         timer_ntfn_badged);
     /* Write registers without resuming (resume_target = 0); starts on first armed timer. */
     return kobj_sel4_err(seL4_TCB_WriteRegisters(ticker_tcb.cap, 0, 0, ARCH_REGS_COUNT, &regs));
 }

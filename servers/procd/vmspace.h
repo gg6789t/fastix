@@ -110,9 +110,6 @@ LIBOS_MUST_CHECK int vms_add_special(struct vmspace *vs, uint64_t addr, struct f
 /* Removes a one-page special VMA previously installed by vms_add_special. */
 void vms_remove_special(struct vmspace *vs, uint64_t addr);
 
-/* Maps `nframes` frames as a contiguous VMA_SHARED region in the mmap area. */
-LIBOS_MUST_CHECK int vms_map_shared_frames(struct vmspace *vs, struct frame *const *frames,
-                                           size_t nframes, uint32_t prot, uint64_t *out);
 
 struct vm_stats vms_stats(void);
 

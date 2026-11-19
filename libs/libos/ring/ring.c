@@ -63,7 +63,10 @@ int64_t ring_write(struct fastix_ring_hdr *r, const void *src, size_t len, bool 
     uint64_t head = atomic_load_explicit(&r->head, memory_order_relaxed);
     uint64_t tail = atomic_load_explicit(&r->tail, memory_order_acquire);
     uint64_t used = head - tail;
-    uint64_t avail = used < r->capacity ? (r->capacity - used) : 0;
+    if (used > r->capacity) {
+        return -FASTIX_EIO; /* corrupted counters (e.g. a misbehaving peer) */
+    }
+    uint64_t avail = r->capacity - used;
 
     if (avail == 0 || (atomic_all && avail < len)) {
         return 0;
@@ -100,7 +103,9 @@ int64_t ring_read(struct fastix_ring_hdr *r, void *dst, size_t len, bool *need_n
     uint64_t tail = atomic_load_explicit(&r->tail, memory_order_relaxed);
     uint64_t head = atomic_load_explicit(&r->head, memory_order_acquire);
     uint64_t avail = head - tail;
-
+    if (avail > r->capacity) {
+        return -FASTIX_EIO; /* corrupted counters: never copy past the buffer */
+    }
     if (avail == 0) {
         if (atomic_load_explicit(&r->closed_write, memory_order_acquire) != 0) {
             /* Re-check head after seeing closed_write to avoid missing final bytes. */
@@ -108,6 +113,9 @@ int64_t ring_read(struct fastix_ring_hdr *r, void *dst, size_t len, bool *need_n
             avail = head - tail;
             if (avail == 0) {
                 return 0; /* EOF */
+            }
+            if (avail > r->capacity) {
+                return -FASTIX_EIO;
             }
         } else {
             return -FASTIX_EAGAIN;

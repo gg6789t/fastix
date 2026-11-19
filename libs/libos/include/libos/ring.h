@@ -24,7 +24,8 @@ uint32_t ring_free(const struct fastix_ring_hdr *r);
 /*
  * Writes up to `len` bytes from `src`.
  * If `atomic_all` is true and free space < len, writes 0 bytes (POSIX PIPE_BUF atomicity).
- * Returns bytes written (>= 0), or -FASTIX_EPIPE if consumer closed the read end.
+ * Returns bytes written (>= 0), -FASTIX_EPIPE if consumer closed the read end, or
+ * -FASTIX_EIO if head/tail are impossible (more than capacity apart).
  * Sets *need_notify = true iff bytes were written and consumer_waiting != 0.
  */
 int64_t ring_write(struct fastix_ring_hdr *r, const void *src, size_t len, bool atomic_all,
@@ -33,7 +34,8 @@ int64_t ring_write(struct fastix_ring_hdr *r, const void *src, size_t len, bool 
 /*
  * Reads up to `len` bytes into `dst`.
  * Returns bytes read (> 0), 0 on EOF (empty and closed_write != 0),
- * or -FASTIX_EAGAIN if empty and producer is still open.
+ * -FASTIX_EAGAIN if empty and producer is still open, or -FASTIX_EIO if head/tail
+ * are impossible. Never copies past the buffer, even if a peer corrupts the counters.
  * Sets *need_notify = true iff bytes were read and producer_waiting != 0.
  */
 int64_t ring_read(struct fastix_ring_hdr *r, void *dst, size_t len, bool *need_notify);

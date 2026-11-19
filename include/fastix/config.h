@@ -21,7 +21,8 @@
 #define FASTIX_PATH_MAX              4096
 #define FASTIX_NAME_MAX              255
 #define FASTIX_SYMLOOP_MAX           40
-#define FASTIX_ARG_MAX               131072      /* 128 KB */
+#define FASTIX_ARG_MAX               131072      /* 128 KB: argv + envp strings and pointers */
+#define FASTIX_EXEC_MAX_ARGS         4096        /* argv entries (and envp entries) per execve */
 
 /* Pipes and shared I/O */
 #define FASTIX_PIPE_BUF              4096        /* POSIX atomic write size */

@@ -18,21 +18,19 @@
 #include "heap.h"
 #include "pipe.h"
 #include "proc.h"
+#include "proc_internal.h"
 #include "signal.h"
 #include "timer.h"
 #include "vdso.h"
 
 /* Endpoint rights for clients: send, and receive a reply. */
-#define CLIENT_EP_RIGHTS seL4_CapRights_new(1, 0, 0, 1) /* grant_reply, grant, read, write */
 #define DEFAULT_UMASK    022
-#define CRED_UNCHANGED   UINT32_MAX
 
 static struct slab_cache proc_cache;
 static struct slab_cache thread_cache;
 static struct proc *table[FASTIX_MAX_PROCS]; /* slot = pid % FASTIX_MAX_PROCS */
 static uint64_t n_procs;
 static uint32_t last_pid;
-static uint32_t next_worker_tid = FASTIX_PID_MAX + 1;
 static uint16_t next_gen = 1;
 static seL4_CPtr endpoint;
 static seL4_CPtr sched_control;
@@ -60,6 +58,16 @@ uint64_t proc_count(void)
 struct proc *proc_table_at(unsigned idx)
 {
     return idx < FASTIX_MAX_PROCS ? table[idx] : NULL;
+}
+
+seL4_CPtr proc_endpoint(void)
+{
+    return endpoint;
+}
+
+struct thread *proc_thread_alloc(void)
+{
+    return slab_alloc(&thread_cache);
 }
 
 struct thread *proc_find_thread(struct proc *p, uint32_t tid)
@@ -271,8 +279,8 @@ static void release(struct proc *p)
 }
 
 /* Configures a thread's TCB, scheduling context, and badged fault endpoint. */
-static int build_thread_objs(struct proc *p, struct thread *t, struct vmspace *vs,
-                             uint64_t ipcbuf_vaddr)
+int proc_build_thread_objs(struct proc *p, struct thread *t, struct vmspace *vs,
+                           uint64_t ipcbuf_vaddr)
 {
     int err;
     if ((err = kobj_alloc(seL4_TCBObject, 0, &t->tcb)) != 0 ||
@@ -375,7 +383,7 @@ int proc_create_empty(struct proc *parent, uint32_t ppid, struct proc **out)
     if ((err = vms_create(&p->vs)) == 0 && (err = build_base_caps(p, 0)) == 0 &&
         (err = frame_new(&p->main_thread->ipcbuf)) == 0 &&
         (err = proc_map_special_pages(p, p->vs, p->main_thread->ipcbuf)) == 0 &&
-        (err = build_thread_objs(p, p->main_thread, p->vs, FASTIX_IPCBUF_BASE)) == 0) {
+        (err = proc_build_thread_objs(p, p->main_thread, p->vs, FASTIX_IPCBUF_BASE)) == 0) {
         *out = p;
         return 0;
     }
@@ -464,7 +472,7 @@ int proc_vfork(struct thread *caller, struct reply_obj *parent_reply, struct pro
         p->main_thread->ipcbuf = caller->ipcbuf;
         uint64_t ipcbuf_vaddr = FASTIX_IPCBUF_BASE +
                                 (uint64_t)caller->tid_slot * FASTIX_IPCBUF_STRIDE;
-        err = build_thread_objs(p, p->main_thread, p->vs, ipcbuf_vaddr);
+        err = proc_build_thread_objs(p, p->main_thread, p->vs, ipcbuf_vaddr);
     }
     if (err == 0) {
         err = kobj_sel4_err(seL4_TCB_ReadRegisters(caller->tcb.cap, 0, 0, ARCH_REGS_COUNT, &regs));
@@ -506,6 +514,12 @@ void proc_vfork_wake_parent(struct proc *child)
             return;
         }
     }
+}
+
+void proc_thread_free(struct thread *t)
+{
+    thread_release(t);
+    slab_free(&thread_cache, t);
 }
 
 /* ---- wait4 & exit ---- */
@@ -657,446 +671,3 @@ void proc_exit(struct proc *p, int status)
     }
 }
 
-/* ---- threads (Step 3C) ---- */
-
-static int tid_slot_alloc(struct proc *p, uint16_t *out)
-{
-    for (unsigned w = 0; w < FASTIX_MAX_THREADS_PER_PROC / 64; w++) {
-        if (~p->tid_slots[w] == 0) {
-            continue;
-        }
-        unsigned bit = (unsigned)__builtin_ctzll(~p->tid_slots[w]);
-        unsigned slot = w * 64u + bit;
-        if (slot == 0 || slot >= FASTIX_MAX_THREADS_PER_PROC) {
-            continue;
-        }
-        p->tid_slots[w] |= 1ULL << bit;
-        *out = (uint16_t)slot;
-        return 0;
-    }
-    return -FASTIX_EAGAIN;
-}
-
-static void tid_slot_free(struct proc *p, uint16_t slot)
-{
-    if (slot == 0 || slot >= FASTIX_MAX_THREADS_PER_PROC) {
-        return;
-    }
-    p->tid_slots[slot / 64u] &= ~(1ULL << (slot % 64u));
-}
-
-static uint32_t worker_tid_alloc(void)
-{
-    uint32_t tid = next_worker_tid++;
-    if (next_worker_tid > FASTIX_BADGE_PID_MASK) {
-        next_worker_tid = FASTIX_PID_MAX + 1;
-    }
-    return tid;
-}
-
-/* Ensures the level-2 thread CNode is allocated and installed at root slot 63. */
-static int ensure_thread_cnode(struct proc *p)
-{
-    if (p->thread_cnode.block != NULL) {
-        return 0;
-    }
-    int err = kobj_alloc(seL4_CapTableObject, FASTIX_THREAD_CNODE_BITS, &p->thread_cnode);
-    if (err != 0) {
-        return err;
-    }
-    err = kobj_sel4_err(seL4_CNode_Copy(p->cnode.cap, FASTIX_CAP_THREAD_CNODE,
-                                        FASTIX_ROOT_CNODE_BITS, cspace_root(), p->thread_cnode.cap,
-                                        seL4_WordBits, seL4_AllRights));
-    if (err != 0) {
-        kobj_free(&p->thread_cnode);
-    }
-    return err;
-}
-
-int proc_thread_create(struct thread *caller, uint64_t entry, uint64_t stack, uint64_t arg,
-                       uint64_t tls, uint64_t ctid_ptr, uint32_t flags, uint32_t *tid_out)
-{
-    struct proc *p = caller->proc;
-    if (entry == 0 || stack == 0) {
-        return -FASTIX_EINVAL;
-    }
-    int err = ensure_thread_cnode(p);
-    if (err != 0) {
-        return err;
-    }
-    uint16_t slot;
-    err = tid_slot_alloc(p, &slot);
-    if (err != 0) {
-        return err;
-    }
-    struct thread *t = slab_alloc(&thread_cache);
-    if (t == NULL) {
-        tid_slot_free(p, slot);
-        return -FASTIX_ENOMEM;
-    }
-    t->proc = p;
-    t->tid = worker_tid_alloc();
-    t->tid_slot = slot;
-    sig_thread_init(t, caller);
-
-    uint64_t ipcbuf_vaddr = FASTIX_IPCBUF_BASE + (uint64_t)slot * FASTIX_IPCBUF_STRIDE;
-    uint64_t badge = fastix_badge_make(FASTIX_BADGE_SYSCALL, p->pid, slot, p->gen);
-    bool ep_minted = false, ipcbuf_mapped = false;
-
-    err = kobj_sel4_err(seL4_CNode_Mint(p->thread_cnode.cap, (seL4_Word)slot * 2u,
-                                        FASTIX_THREAD_CNODE_BITS, cspace_root(), endpoint,
-                                        seL4_WordBits, CLIENT_EP_RIGHTS, badge));
-    if (err == 0) {
-        ep_minted = true;
-        err = frame_new(&t->ipcbuf);
-    }
-    if (err == 0) {
-        err = vms_add_special(p->vs, ipcbuf_vaddr, t->ipcbuf, FASTIX_PROT_READ | FASTIX_PROT_WRITE);
-    }
-    if (err == 0) {
-        ipcbuf_mapped = true;
-        err = build_thread_objs(p, t, p->vs, ipcbuf_vaddr);
-    }
-    if (err == 0 && (flags & FASTIX_CLONE_CHILD_SETTID) && ctid_ptr != 0) {
-        uint32_t tid32 = t->tid;
-        err = vms_write_user(p->vs, ctid_ptr, &tid32, sizeof(tid32));
-    }
-    if (err == 0) {
-        if (flags & FASTIX_CLONE_CHILD_CLEARTID) {
-            t->clear_child_tid = ctid_ptr;
-        }
-        seL4_UserContext regs;
-        arch_regs_init_entry(&regs, entry, stack & ~15ULL, arg);
-        if (flags & FASTIX_CLONE_SETTLS) {
-            regs.tpidr_el0 = tls;
-        }
-        list_push_back(&p->threads, &t->link);
-        p->live_threads++;
-        err = proc_thread_start(t, &regs);
-        if (err != 0) {
-            list_remove(&t->link);
-            p->live_threads--;
-        }
-    }
-    if (err != 0) {
-        if (ipcbuf_mapped) {
-            vms_remove_special(p->vs, ipcbuf_vaddr);
-        }
-        if (ep_minted) {
-            (void)seL4_CNode_Delete(p->thread_cnode.cap, (seL4_Word)slot * 2u,
-                                    FASTIX_THREAD_CNODE_BITS);
-        }
-        thread_release(t);
-        slab_free(&thread_cache, t);
-        tid_slot_free(p, slot);
-        return err;
-    }
-    *tid_out = t->tid;
-    return 0;
-}
-
-static void destroy_single_thread(struct proc *p, struct thread *t)
-{
-    uint16_t slot = t->tid_slot;
-    uint64_t ipcbuf_vaddr = FASTIX_IPCBUF_BASE + (uint64_t)slot * FASTIX_IPCBUF_STRIDE;
-
-    list_remove(&t->link);
-    p->live_threads--;
-    if (p->main_thread == t) {
-        p->main_thread = list_empty(&p->threads)
-                             ? NULL
-                             : LIST_ENTRY(p->threads.next, struct thread, link);
-    }
-    vms_remove_special(p->vs, ipcbuf_vaddr);
-    if (slot != 0 && p->thread_cnode.block != NULL) {
-        (void)seL4_CNode_Delete(p->thread_cnode.cap, (seL4_Word)slot * 2u,
-                                FASTIX_THREAD_CNODE_BITS);
-    }
-    thread_release(t);
-    slab_free(&thread_cache, t);
-    tid_slot_free(p, slot);
-}
-
-void proc_thread_exit(struct thread *t, int code)
-{
-    struct proc *p = t->proc;
-    futex_exit_robust_list(t);
-
-    if (t->clear_child_tid != 0 && p->vs != NULL) {
-        uint32_t zero = 0;
-        if (vms_write_user(p->vs, t->clear_child_tid, &zero, sizeof(zero)) == 0) {
-            (void)futex_wake_internal(p->vs, t->clear_child_tid, 1, true,
-                                      FASTIX_FUTEX_BITSET_MATCH_ANY);
-            (void)futex_wake_internal(p->vs, t->clear_child_tid, 1, false,
-                                      FASTIX_FUTEX_BITSET_MATCH_ANY);
-        }
-        t->clear_child_tid = 0;
-    }
-
-    if (p->live_threads <= 1) {
-        proc_exit(p, FASTIX_W_EXITED(code));
-        return;
-    }
-    destroy_single_thread(p, t);
-}
-
-void proc_kill_other_threads(struct thread *caller)
-{
-    struct proc *p = caller->proc;
-    struct list_node *n, *tmp;
-    LIST_FOREACH_SAFE(n, tmp, &p->threads) {
-        struct thread *t = LIST_ENTRY(n, struct thread, link);
-        if (t != caller) {
-            futex_exit_robust_list(t);
-            destroy_single_thread(p, t);
-        }
-    }
-    if (caller->tid_slot != 0) {
-        /* Move surviving execve caller to canonical slot 0 (main thread). */
-        uint16_t old_slot = caller->tid_slot;
-        caller->tid_slot = 0;
-        caller->tid = p->pid;
-        p->main_thread = caller;
-        tid_slot_free(p, old_slot);
-    }
-    if (p->thread_cnode.block != NULL) {
-        (void)seL4_CNode_Delete(p->cnode.cap, FASTIX_CAP_THREAD_CNODE, FASTIX_ROOT_CNODE_BITS);
-        kobj_free(&p->thread_cnode);
-    }
-}
-
-/* ---- process groups and sessions ---- */
-
-static bool pgid_exists_in_session(uint32_t pgid, uint32_t sid)
-{
-    for (unsigned i = 0; i < FASTIX_MAX_PROCS; i++) {
-        struct proc *p = table[i];
-        if (p != NULL && !p->zombie && p->pgid == pgid && p->sid == sid) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool any_proc_has_pgid(uint32_t pgid)
-{
-    for (unsigned i = 0; i < FASTIX_MAX_PROCS; i++) {
-        struct proc *p = table[i];
-        if (p != NULL && !p->zombie && p->pgid == pgid) {
-            return true;
-        }
-    }
-    return false;
-}
-
-int proc_getpgid(struct proc *caller, uint32_t pid, uint32_t *out)
-{
-    struct proc *target = pid == 0 ? caller : proc_get(pid);
-    if (target == NULL || target->zombie) {
-        return -FASTIX_ESRCH;
-    }
-    *out = target->pgid;
-    return 0;
-}
-
-int proc_setpgid(struct proc *caller, uint32_t pid, uint32_t pgid)
-{
-    if ((int32_t)pid < 0 || (int32_t)pgid < 0) {
-        return -FASTIX_EINVAL;
-    }
-    struct proc *target = pid == 0 ? caller : proc_get(pid);
-    if (target == NULL || target->zombie) {
-        return -FASTIX_ESRCH;
-    }
-    if (target != caller && target->ppid != caller->pid) {
-        return -FASTIX_ESRCH;
-    }
-    if (target != caller && target->did_exec) {
-        return -FASTIX_EACCES;
-    }
-    if (target->pid == target->sid || target->sid != caller->sid) {
-        return -FASTIX_EPERM;
-    }
-    uint32_t new_pgid = pgid == 0 ? target->pid : pgid;
-    if (new_pgid != target->pid && !pgid_exists_in_session(new_pgid, caller->sid)) {
-        return -FASTIX_EPERM;
-    }
-    target->pgid = new_pgid;
-    proc_sync_info(target);
-    return 0;
-}
-
-int proc_getsid(struct proc *caller, uint32_t pid, uint32_t *out)
-{
-    struct proc *target = pid == 0 ? caller : proc_get(pid);
-    if (target == NULL || target->zombie) {
-        return -FASTIX_ESRCH;
-    }
-    *out = target->sid;
-    return 0;
-}
-
-int proc_setsid(struct proc *caller, uint32_t *out)
-{
-    if (any_proc_has_pgid(caller->pid)) {
-        return -FASTIX_EPERM;
-    }
-    caller->sid = caller->pid;
-    caller->pgid = caller->pid;
-    proc_sync_info(caller);
-    *out = caller->sid;
-    return 0;
-}
-
-/* ---- credentials & umask ---- */
-
-static bool cred_allowed(uint32_t val, uint32_t real, uint32_t eff, uint32_t saved)
-{
-    return val == CRED_UNCHANGED || val == real || val == eff || val == saved;
-}
-
-int proc_setuid(struct proc *p, uint32_t uid)
-{
-    if (p->euid == 0) {
-        p->uid = uid;
-        p->euid = uid;
-        p->suid = uid;
-    } else if (uid == p->uid || uid == p->suid) {
-        p->euid = uid;
-    } else {
-        return -FASTIX_EPERM;
-    }
-    proc_sync_info(p);
-    return 0;
-}
-
-int proc_seteuid(struct proc *p, uint32_t euid)
-{
-    if (p->euid != 0 && euid != p->uid && euid != p->euid && euid != p->suid) {
-        return -FASTIX_EPERM;
-    }
-    p->euid = euid;
-    proc_sync_info(p);
-    return 0;
-}
-
-int proc_setreuid(struct proc *p, uint32_t ruid, uint32_t euid)
-{
-    if (p->euid != 0) {
-        if ((ruid != CRED_UNCHANGED && ruid != p->uid && ruid != p->euid) ||
-            !cred_allowed(euid, p->uid, p->euid, p->suid)) {
-            return -FASTIX_EPERM;
-        }
-    }
-    uint32_t old_uid = p->uid;
-    if (ruid != CRED_UNCHANGED) {
-        p->uid = ruid;
-    }
-    if (euid != CRED_UNCHANGED) {
-        p->euid = euid;
-    }
-    if (ruid != CRED_UNCHANGED || (euid != CRED_UNCHANGED && euid != old_uid)) {
-        p->suid = p->euid;
-    }
-    proc_sync_info(p);
-    return 0;
-}
-
-int proc_setresuid(struct proc *p, uint32_t ruid, uint32_t euid, uint32_t suid)
-{
-    if (p->euid != 0) {
-        if (!cred_allowed(ruid, p->uid, p->euid, p->suid) ||
-            !cred_allowed(euid, p->uid, p->euid, p->suid) ||
-            !cred_allowed(suid, p->uid, p->euid, p->suid)) {
-            return -FASTIX_EPERM;
-        }
-    }
-    if (ruid != CRED_UNCHANGED) {
-        p->uid = ruid;
-    }
-    if (euid != CRED_UNCHANGED) {
-        p->euid = euid;
-    }
-    if (suid != CRED_UNCHANGED) {
-        p->suid = suid;
-    }
-    proc_sync_info(p);
-    return 0;
-}
-
-int proc_setgid(struct proc *p, uint32_t gid)
-{
-    if (p->euid == 0) {
-        p->gid = gid;
-        p->egid = gid;
-        p->sgid = gid;
-    } else if (gid == p->gid || gid == p->sgid) {
-        p->egid = gid;
-    } else {
-        return -FASTIX_EPERM;
-    }
-    proc_sync_info(p);
-    return 0;
-}
-
-int proc_setegid(struct proc *p, uint32_t egid)
-{
-    if (p->euid != 0 && egid != p->gid && egid != p->egid && egid != p->sgid) {
-        return -FASTIX_EPERM;
-    }
-    p->egid = egid;
-    proc_sync_info(p);
-    return 0;
-}
-
-int proc_setregid(struct proc *p, uint32_t rgid, uint32_t egid)
-{
-    if (p->euid != 0) {
-        if ((rgid != CRED_UNCHANGED && rgid != p->gid && rgid != p->egid) ||
-            !cred_allowed(egid, p->gid, p->egid, p->sgid)) {
-            return -FASTIX_EPERM;
-        }
-    }
-    uint32_t old_gid = p->gid;
-    if (rgid != CRED_UNCHANGED) {
-        p->gid = rgid;
-    }
-    if (egid != CRED_UNCHANGED) {
-        p->egid = egid;
-    }
-    if (rgid != CRED_UNCHANGED || (egid != CRED_UNCHANGED && egid != old_gid)) {
-        p->sgid = p->egid;
-    }
-    proc_sync_info(p);
-    return 0;
-}
-
-int proc_setresgid(struct proc *p, uint32_t rgid, uint32_t egid, uint32_t sgid)
-{
-    if (p->euid != 0) {
-        if (!cred_allowed(rgid, p->gid, p->egid, p->sgid) ||
-            !cred_allowed(egid, p->gid, p->egid, p->sgid) ||
-            !cred_allowed(sgid, p->gid, p->egid, p->sgid)) {
-            return -FASTIX_EPERM;
-        }
-    }
-    if (rgid != CRED_UNCHANGED) {
-        p->gid = rgid;
-    }
-    if (egid != CRED_UNCHANGED) {
-        p->egid = egid;
-    }
-    if (sgid != CRED_UNCHANGED) {
-        p->sgid = sgid;
-    }
-    proc_sync_info(p);
-    return 0;
-}
-
-uint32_t proc_umask(struct proc *p, uint32_t mask)
-{
-    uint32_t old = p->umask;
-    p->umask = mask & 0777u;
-    proc_sync_info(p);
-    return old;
-}

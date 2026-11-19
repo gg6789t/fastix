@@ -93,6 +93,16 @@ static int run_check(uint64_t *sp)
         if (fastix_sys1(FASTIX_SYS_getpgid, 0) != (int64_t)want_pgid) return 33;
         return 90;
     }
+    if (str_eq(argv[1], "check_big")) {
+        uint64_t n = 0;
+        for (; envp[n] != 0; n++) {
+            for (int i = 0; i < 99; i++) {
+                if (envp[n][i] != 'E') return 94;
+            }
+            if (envp[n][99] != '\0') return 95;
+        }
+        return n == 1000 ? 93 : 96;
+    }
     if (str_eq(argv[1], "check_vfork")) {
         return 91;
     }

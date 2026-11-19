@@ -23,6 +23,36 @@ static int64_t sys_execve(const char *path, const char *const *argv, const char 
                        (uint64_t)(uintptr_t)envp);
 }
 
+#define BIG_ENV_COUNT 1400
+#define BIG_ENV_LEN   100 /* 99 x 'E' + NUL */
+static char big_env[BIG_ENV_COUNT][BIG_ENV_LEN];
+static const char *big_envp[BIG_ENV_COUNT + 1];
+
+/* ~100 KB of environment must pass execve (FASTIX_ARG_MAX is 128 KB); ~140 KB must not. */
+static int exec_big_env(void)
+{
+    const char *argv[] = { "/bin/exec_helper", "check_big", 0 };
+    int st = 0;
+
+    for (int i = 0; i < BIG_ENV_COUNT; i++) {
+        for (int k = 0; k < BIG_ENV_LEN - 1; k++) {
+            big_env[i][k] = 'E';
+        }
+        big_env[i][BIG_ENV_LEN - 1] = '\0';
+        big_envp[i] = big_env[i];
+    }
+    big_envp[1000] = 0;
+    int64_t pid = fastix_sys0(FASTIX_SYS_fork);
+    if (pid == 0) {
+        (void)sys_execve("/bin/exec_helper", argv, big_envp);
+        vmtest_exit(2);
+    }
+    int ok = pid > 0 && vmtest_wait4(pid, &st, 0) == pid && st == FASTIX_W_EXITED(93);
+    big_envp[1000] = big_env[1000];
+    big_envp[BIG_ENV_COUNT] = 0;
+    return ok && sys_execve("/bin/exec_helper", argv, big_envp) == -FASTIX_E2BIG;
+}
+
 static void t_execve(void)
 {
     int ok = 1, st = 0;
@@ -69,6 +99,7 @@ static void t_execve(void)
     ok &= sys_execve("/bin/not_elf", empty_v, empty_v) == -FASTIX_ENOEXEC;
     ok &= sys_execve("/bin/no_such_bin", empty_v, empty_v) == -FASTIX_ENOENT;
     ok &= fastix_sys3(FASTIX_SYS_execve, 8, 0, 0) == -FASTIX_EFAULT;
+    ok &= exec_big_env();
 
     vmtest_report("execve_elf_and_shebang_depth4", ok);
 }

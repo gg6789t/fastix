@@ -19,16 +19,14 @@
 #include "timer.h"
 #include "vdso.h"
 
-#define EXEC_MAX_ARGS   256
-#define EXEC_POOL_BYTES 32768
 
 /* Single-threaded procd scratch buffers (keeps server stack tiny). */
 struct exec_buf {
-    char pool[EXEC_POOL_BYTES];
+    char pool[FASTIX_ARG_MAX];
     size_t used;
-    const char *argv[EXEC_MAX_ARGS + 1];
+    const char *argv[FASTIX_EXEC_MAX_ARGS + 1];
     size_t argc;
-    const char *envp[EXEC_MAX_ARGS + 1];
+    const char *envp[FASTIX_EXEC_MAX_ARGS + 1];
     size_t envc;
     char path[FASTIX_PATH_MAX];
 };
@@ -98,7 +96,7 @@ static int prepend_shebang(struct exec_buf *b, const char *interp, const char *o
 {
     size_t add = (opt_arg[0] != '\0') ? 2u : 1u;
     size_t tail = b->argc > 0 ? b->argc - 1u : 0u; /* drop previous argv[0] */
-    if (add + 1u + tail > EXEC_MAX_ARGS) {
+    if (add + 1u + tail > FASTIX_EXEC_MAX_ARGS) {
         return -FASTIX_E2BIG;
     }
     char *s_interp = pool_dup(b, interp);
@@ -166,8 +164,8 @@ static int read_exec_inputs(struct vmspace *vs, uint64_t path_u, uint64_t argv_u
     if (err != 0) {
         return err;
     }
-    if ((err = copy_str_vec(vs, argv_u, b, b->argv, EXEC_MAX_ARGS, &b->argc)) != 0 ||
-        (err = copy_str_vec(vs, envp_u, b, b->envp, EXEC_MAX_ARGS, &b->envc)) != 0) {
+    if ((err = copy_str_vec(vs, argv_u, b, b->argv, FASTIX_EXEC_MAX_ARGS, &b->argc)) != 0 ||
+        (err = copy_str_vec(vs, envp_u, b, b->envp, FASTIX_EXEC_MAX_ARGS, &b->envc)) != 0) {
         return err;
     }
     return resolve_image(b, img_out);

@@ -878,6 +878,8 @@ No phase may be declared complete until **ALL** its exit criteria pass and are v
 - **Exit Criteria:**
   - QEMU behavioral tests: 1,000× `fork+exit+waitpid` with 0 byte/cap leaks; nested signal handlers + `sigaltstack` + FPU register preservation across signals; multithreaded futex contention test (8 threads, 100,000 ops); pipe throughput & atomic 4 KB writer stress test; `SIGCHLD` + zombie reaping + orphan reparenting to PID 1.
 
+- *Implementation note (2026-11-19):* the only exception to "procd is single-threaded" is `servers/procd/ticker.c`, a tiny helper thread that touches no procd data and only signals procd's timer notification every 1 ms while a timer is armed. It is temporary: the Phase 4 timer driver replaces it.
+
 ### Phase 4: `devd`, Isolated Drivers, `vfsd`, Unified Page Cache & Persistent Storage
 - **Objectives:** Real hardware/VirtIO drivers, full VFS, unified page cache, and crash-clean persistent `ext2` filesystem.
 - **Deliverables:**

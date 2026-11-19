@@ -39,20 +39,28 @@ def qemu_command(build_dir):
     ]
 
 
-def run(cmd, timeout_s, quiet):
-    """Run QEMU, return (lines, exit_code_or_None, timed_out, done_after_s, fatal_line)."""
+def run(cmd, timeout_s, stall_s, quiet):
+    """Run QEMU, return (lines, exit_code_or_None, why_stopped_or_None, done_after_s, fatal_line).
+
+    why_stopped is "timeout" (whole run too long) or "stall" (no output for stall_s seconds).
+    """
     start = time.monotonic()
     proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
     lines, pending = [], b""
     done_at = None
     fatal = None
-    timed_out = False
+    why_stopped = None
+    last_output = start
     while True:
         now = time.monotonic()
-        deadline = start + timeout_s if done_at is None else done_at + EXIT_GRACE_S
+        if done_at is None:
+            deadline = min(start + timeout_s, last_output + stall_s)
+        else:
+            deadline = done_at + EXIT_GRACE_S
         if now >= deadline:
-            timed_out = done_at is None
+            if done_at is None:
+                why_stopped = "timeout" if now >= start + timeout_s else "stall"
             break
         ready, _, _ = select.select([proc.stdout], [], [], deadline - now)
         if not ready:
@@ -61,6 +69,7 @@ def run(cmd, timeout_s, quiet):
         if not chunk:  # QEMU exited and closed its output
             break
         pending += chunk
+        last_output = time.monotonic()
         while b"\n" in pending:
             raw, pending = pending.split(b"\n", 1)
             line = raw.decode("utf-8", "replace").rstrip("\r")
@@ -81,7 +90,7 @@ def run(cmd, timeout_s, quiet):
         proc.wait()
         exit_code = None  # did not exit by itself
     done_after = None if done_at is None else done_at - start
-    return lines, exit_code, timed_out, done_after, fatal
+    return lines, exit_code, why_stopped, done_after, fatal
 
 
 def main():
@@ -89,12 +98,14 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--build", default=os.path.join(repo, "build"), help="build directory")
     ap.add_argument("--timeout", type=float, default=60.0, help="seconds before giving up")
+    ap.add_argument("--stall", type=float, default=90.0,
+                    help="seconds without any output before treating a test as hung")
     ap.add_argument("--log", help="also write the serial log to this file")
     ap.add_argument("--quiet", action="store_true", help="do not echo serial output")
     args = ap.parse_args()
 
-    lines, exit_code, timed_out, done_after, fatal = run(qemu_command(args.build), args.timeout,
-                                                  args.quiet)
+    lines, exit_code, why_stopped, done_after, fatal = run(qemu_command(args.build), args.timeout,
+                                                           args.stall, args.quiet)
     if args.log:
         with open(args.log, "w") as f:
             f.write("\n".join(lines) + "\n")
@@ -106,8 +117,11 @@ def main():
     problems = []
     if fatal:
         problems.append("seL4 reported a fatal error: " + fatal.strip())
-    if timed_out:
+    if why_stopped == "timeout":
         problems.append(f"timed out after {args.timeout:.0f}s without a DONE marker")
+    elif why_stopped == "stall":
+        last = passed[-1] if passed else "(none)"
+        problems.append(f"hung: no output for {args.stall:.0f}s; the test after '{last}' is stuck")
     if not done:
         problems.append("no [FASTIX-SUITE DONE] marker")
     elif done[-1] != 0:

@@ -26,16 +26,16 @@ eventfd in a single-threaded non-blocking event loop.
 - **Modules and data structures:**
   - `cspace.c`, `kobj.c`, `heap.c`, `frame.c`: two-level procd CSpace (65,536 slots), buddy untyped
     objects, slab heap, pooled refcounted 4 KB frames.
-  - `vmspace.c`: refcounted `vmspace` (shared during `vfork`), VMA/page `rtree`s, lazy `anon_shm`
+  - `vmspace.c` (+ `vm_user.c`: checked reads/writes of user memory, `vm_internal.h`): refcounted `vmspace` (shared during `vfork`), VMA/page `rtree`s, lazy `anon_shm`
     backing for `MAP_SHARED`, safe `vms_read`/`vms_write_user`.
   - `loader.c`, `exec.c`, `images.c`: ELF64 + `#!` loader, System V stack/auxv (`AT_SYSINFO_EHDR`),
     `execve` and `posix_spawn_fast`.
-  - `proc.c`: process table, `struct thread` list, lazy level-2 `THREAD_CNODE`, `fork`/`vfork`,
+  - `proc.c` (+ `thread.c`: threads; `proc_ids.c`: groups, sessions, credentials; `proc_internal.h`): process table, `struct thread` list, lazy level-2 `THREAD_CNODE`, `fork`/`vfork`,
     `thread_create`/`exit`, `wait4`, pgid/sid, credentials, orphan reparenting.
-  - `signal.c`, `vdso.c`: 64-signal queues (standard + RT FIFO), user-stack frame delivery through
+  - `signal.c` (+ `sig_sys.c`: signal syscalls; `sig_internal.h`), `vdso.c`: 64-signal queues (standard + RT FIFO), user-stack frame delivery through
     VDSO `__fastix_sigenter`/`__fastix_sigreturn` (saving/restoring all GP + 32×128-bit FPU regs),
     `sigaltstack`, `SIGSTOP`/`SIGCONT`, `EINTR` vs `SA_RESTART`.
-  - `timer.c`: sleeps, `ITIMER_REAL`, POSIX interval timers, driven by a suspended-when-idle 1 ms
+  - `timer.c` (+ `ticker.c`, a temporary tick thread until the Phase 4 timer driver): sleeps, `ITIMER_REAL`, POSIX interval timers, driven by a suspended-when-idle 1 ms
     MCS ticker signaling a notification bound to procd's main thread.
   - `futex.c`: 64-bucket private/shared futex hash waitqueues, timeouts, robust list exit walk.
   - `pipe.c`: 64 KB SPSC-ring pipes (17 pooled frames each, `PIPE_BUF` atomicity), `eventfd2`, and

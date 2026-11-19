@@ -127,7 +127,6 @@ set_source_files_properties("${IMAGES_ASM}" PROPERTIES OBJECT_DEPENDS "${image_f
 # --- procd: the seL4 root task ---
 add_executable(procd
     arch/${KernelSel4Arch}/crt0.S
-    arch/${KernelSel4Arch}/ticker.S
     arch/${KernelSel4Arch}/vdso_tramp.S
     servers/procd/cspace.c
     servers/procd/exec.c
@@ -140,12 +139,17 @@ add_executable(procd
     servers/procd/main.c
     servers/procd/pipe.c
     servers/procd/proc.c
+    servers/procd/proc_ids.c
     servers/procd/reply.c
     servers/procd/server.c
     servers/procd/signal.c
+    servers/procd/sig_sys.c
+    servers/procd/ticker.c
+    servers/procd/thread.c
     servers/procd/timer.c
     servers/procd/vdso.c
     servers/procd/vmspace.c
+    servers/procd/vm_user.c
     "${IMAGES_ASM}")
 fastix_sel4_target(procd)
 target_compile_definitions(procd PRIVATE FASTIX_TEST_HOOKS) # test-only procd operations
