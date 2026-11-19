@@ -96,6 +96,7 @@ Every agent or contributor MUST obey these rules on every task:
     - **Known Issues & Open Questions:** real bugs and decisions waiting for the owner.
     - **Key Numbers:** latest measured sizes and benchmark results vs Section 1.4 budgets (state QEMU TCG / HVF / hardware).
     Keep it short (target under ~150 lines): when a phase completes, collapse its Done Log into a 3–5 line summary.
+11. **Match the House Style:** Follow `FORMAT.md` (workflow, code style, tests, commits, and report format) so every agent's work looks the same.
 
 ### 2.1 Code Simplicity, Speed & Maintainability Rules
 Fastix code MUST be simple enough that a new reader understands any function in about two minutes, AND fast. These rules make both possible:
