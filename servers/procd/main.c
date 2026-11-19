@@ -13,6 +13,7 @@
 #include <sel4/sel4.h>
 
 #include "cspace.h"
+#include "devboot.h"
 #include "frame.h"
 #include "futex.h"
 #include "images.h"
@@ -157,6 +158,9 @@ _Noreturn void procd_main(seL4_BootInfo *bi)
     if (problem == NULL) {
         kprint_str("[FASTIX-TEST PASS] bootinfo_summary\n");
         problem = setup(bi);
+    }
+    if (problem == NULL) {
+        problem = devboot_start(bi) == 0 ? NULL : "spawning devd";
     }
     if (problem == NULL) {
         problem = start_init();

@@ -10,6 +10,7 @@
 #include <fastix/signal_abi.h>
 #include <libos/kprint.h>
 
+#include "devboot.h"
 #include "exec.h"
 #include "futex.h"
 #include "images.h"
@@ -331,6 +332,12 @@ static enum outcome test_hook(struct call *c)
         c->ret[0] = err != 0 ? (uint64_t)(int64_t)err : child->pid;
         return OUT_REPLY;
     }
+    case FASTIX_TEST_GET_DRV_EP: {
+        int err = c->p->pid == 1 ? devboot_install_drv_ep(c->p, (uint32_t)c->arg[0])
+                                 : -FASTIX_EPERM;
+        c->ret[0] = (uint64_t)(int64_t)err;
+        return OUT_REPLY;
+    }
     default:
         c->ret[0] = (uint64_t)-FASTIX_ENOSYS;
         return OUT_REPLY;
@@ -626,6 +633,10 @@ static enum outcome dispatch(seL4_Word badge, seL4_MessageInfo_t info, unsigned 
     if (fastix_badge_type(badge) == FASTIX_BADGE_NOTIFY) {
         timer_tick();
         return OUT_NONE;
+    }
+    if (fastix_badge_type(badge) == FASTIX_BADGE_SERVER) {
+        devboot_handle_server_msg(badge, info, nret);
+        return OUT_REPLY;
     }
 
     struct call c = { .label = seL4_MessageInfo_get_label(info), .nret = 1 };

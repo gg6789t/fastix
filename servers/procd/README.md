@@ -2,9 +2,10 @@
 
 The seL4 root task and process executive (AGENTS.md 6.3 B).
 
-**Current (Phase 3):** procd boots, switches to its own two-level CSpace, starts PID 1 from an
-embedded image, and serves process lifecycle, VM, signals, timers, threads, futex, pipes, and
-eventfd in a single-threaded non-blocking event loop.
+**Current (Phase 4B):** procd boots, switches to its own two-level CSpace, spawns isolated `devd`
+(handing over the runtime DTB, Device Untypeds, `IRQControl`, and a 4 MB RAM untyped), starts PID 1
+from an embedded image, and serves process lifecycle, VM, signals, timers, threads, futex, pipes,
+eventfd, and downward Rank 20 → Rank 10 server control calls in a single-threaded event loop.
 
 - **IPC operations:**
   - Process & thread: `exit` (thread), `exit_group`, `fork`, `vfork`, `posix_spawn_fast`, `execve`
@@ -20,7 +21,11 @@ eventfd in a single-threaded non-blocking event loop.
   - Sync & local IPC: `futex` (`WAIT`/`WAKE`/`REQUEUE`/`CMP_REQUEUE`/`WAIT_BITSET`/`WAKE_BITSET`,
     private & shared), `set_robust_list`/`get_robust_list`, `pipe2`, `eventfd2`, plus temporary
     Phase 3 `read`/`write`/`close`/`dup`/`dup3`/`fcntl` on pipe/eventfd FDs (moves to `vfsd` in Phase 4).
-  - With `FASTIX_TEST_HOOKS`: test labels in `fastix/abi.h` (ping, stats, vm stats, last kill, ipc count, spawn).
+  - Server control (`FASTIX_BADGE_SERVER`, Rank 20 → Rank 10): `FASTIX_SRV_SET_REALTIME_NS`
+    (updates VDSO `realtime_offset_ns` under seqlock), `FASTIX_SRV_REGISTER_DRV` (stores driver
+    `service_ep` caps registered by `devd`).
+  - With `FASTIX_TEST_HOOKS`: test labels in `fastix/abi.h` (ping, stats, vm stats, last kill, ipc
+    count, spawn, get driver endpoint).
 - **Faults:** VM faults resolve demand-zero, COW, sole-owner upgrade, and shared pages; unhandled
   faults deliver `SIGSEGV`/`SIGBUS`/`SIGILL` to a user handler if installed, else terminate the process.
 - **Modules and data structures:**
@@ -35,7 +40,9 @@ eventfd in a single-threaded non-blocking event loop.
   - `signal.c` (+ `sig_sys.c`: signal syscalls; `sig_internal.h`), `vdso.c`: 64-signal queues (standard + RT FIFO), user-stack frame delivery through
     VDSO `__fastix_sigenter`/`__fastix_sigreturn` (saving/restoring all GP + 32×128-bit FPU regs),
     `sigaltstack`, `SIGSTOP`/`SIGCONT`, `EINTR` vs `SA_RESTART`.
-  - `timer.c` (+ `ticker.c`, a temporary tick thread until the Phase 4 timer driver): sleeps, `ITIMER_REAL`, POSIX interval timers, driven by a suspended-when-idle 1 ms
+  - `devboot.c`: parses `SEL4_BOOTINFO_HEADER_FDT` from `seL4_BootInfo`, spawns `devd`, moves
+    Device Untypeds + `IRQControl` to `devd`, and handles `FASTIX_BADGE_SERVER` registration/RTC ops.
+  - `timer.c` (+ `ticker.c`, kept on `qemu-arm-virt` per `docs/adr/0002-timer.md`): sleeps, `ITIMER_REAL`, POSIX interval timers, driven by a suspended-when-idle 1 ms
     MCS ticker signaling a notification bound to procd's main thread.
   - `futex.c`: 64-bucket private/shared futex hash waitqueues, timeouts, robust list exit walk.
   - `pipe.c`: 64 KB SPSC-ring pipes (17 pooled frames each, `PIPE_BUF` atomicity), `eventfd2`, and

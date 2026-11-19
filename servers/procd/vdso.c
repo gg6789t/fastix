@@ -69,3 +69,15 @@ uint64_t vdso_realtime_offset_ns(void)
 {
     return data->realtime_offset_ns;
 }
+
+void vdso_set_realtime_ns(uint64_t epoch_ns)
+{
+    uint64_t mono = vdso_mono_ns();
+    uint64_t off = epoch_ns >= mono ? (epoch_ns - mono) : 0;
+    uint32_t seq = atomic_load_explicit(&data->seq, memory_order_relaxed);
+
+    atomic_store_explicit(&data->seq, seq + 1U, memory_order_relaxed);
+    atomic_thread_fence(memory_order_release);
+    data->realtime_offset_ns = off;
+    atomic_store_explicit(&data->seq, seq + 2U, memory_order_release);
+}

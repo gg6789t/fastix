@@ -65,6 +65,8 @@ add_library(libos STATIC
     libs/libos/alloc/slab.c
     libs/libos/alloc/ut_buddy.c
     libs/libos/cap/slot_alloc.c
+    libs/libos/ds/hashtab.c
+    libs/libos/ds/radix.c
     libs/libos/ds/rtree.c
     libs/libos/elf/elf.c
     libs/libos/fmt/kprint.c
@@ -72,6 +74,77 @@ add_library(libos STATIC
     libs/libos/ring/ring.c)
 fastix_sel4_target(libos)
 target_include_directories(libos PUBLIC libs/libos/include)
+
+# --- libdriver: shared hardware/DTB/DMA/IRQ/VirtIO helpers for devd and drivers ---
+add_library(libdriver STATIC
+    libs/libdriver/dtb.c
+    libs/libdriver/dma.c
+    libs/libdriver/irq.c
+    libs/libdriver/virtio.c)
+fastix_sel4_target(libdriver)
+target_include_directories(libdriver PUBLIC libs/libdriver/include)
+target_link_libraries(libdriver PRIVATE libos)
+
+# --- isolated drivers (embedded into devd until vfsd/cpiofs loads them in Step 4D) ---
+set(FASTIX_BIN_LINK_FLAGS
+    -nostdlib -Wl,-e,_start -Wl,-z,max-page-size=4096 -Wl,--build-id=none -Wl,--gc-sections)
+
+function(fastix_driver name)
+    add_executable(${name} drivers/common/start.S drivers/common/entry.c ${ARGN})
+    fastix_sel4_target(${name})
+    target_compile_options(${name} PRIVATE $<$<COMPILE_LANGUAGE:C>:-ffunction-sections -fdata-sections>)
+    target_link_libraries(${name} PRIVATE libdriver libos)
+    target_link_options(${name} PRIVATE ${FASTIX_BIN_LINK_FLAGS} -static
+        -Wl,--image-base=${FASTIX_EXEC_BASE})
+    set_target_properties(${name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+endfunction()
+
+fastix_driver(uart_pl011 drivers/uart_pl011/main.c)
+fastix_driver(rtc_pl031 drivers/rtc_pl031/main.c)
+fastix_driver(virtio_rng drivers/virtio_rng/main.c)
+fastix_driver(virtio_blk drivers/virtio_blk/main.c)
+fastix_driver(fault_test drivers/fault_test/main.c)
+
+set(FASTIX_DRIVERS uart_pl011 rtc_pl031 virtio_rng virtio_blk fault_test)
+set(DEVD_IMAGES_ASM "${CMAKE_CURRENT_BINARY_DIR}/devd_images.S")
+set(devd_images_text "")
+set(devd_image_files "")
+foreach(drv IN LISTS FASTIX_DRIVERS)
+    string(APPEND devd_images_text
+"    .section .fastix_drivers, \"a\"
+    .balign 16
+    .global fastix_drv_${drv}_start
+fastix_drv_${drv}_start:
+    .incbin \"${CMAKE_CURRENT_BINARY_DIR}/${drv}.stripped\"
+    .global fastix_drv_${drv}_end
+fastix_drv_${drv}_end:
+")
+    add_custom_command(
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${drv}.stripped"
+        COMMAND ${CMAKE_OBJCOPY} --strip-all "${CMAKE_CURRENT_BINARY_DIR}/${drv}"
+                "${CMAKE_CURRENT_BINARY_DIR}/${drv}.stripped"
+        DEPENDS ${drv} VERBATIM)
+    list(APPEND devd_image_files "${CMAKE_CURRENT_BINARY_DIR}/${drv}.stripped")
+endforeach()
+add_custom_target(stripped_drivers DEPENDS ${devd_image_files})
+file(WRITE "${DEVD_IMAGES_ASM}" "${devd_images_text}")
+set_source_files_properties("${DEVD_IMAGES_ASM}" PROPERTIES OBJECT_DEPENDS "${devd_image_files}")
+
+# --- devd: isolated device manager & driver supervisor ---
+add_executable(devd
+    servers/devd/start.S
+    servers/devd/main.c
+    servers/devd/kobj.c
+    servers/devd/spawn.c
+    servers/devd/images.c
+    "${DEVD_IMAGES_ASM}")
+fastix_sel4_target(devd)
+target_compile_options(devd PRIVATE $<$<COMPILE_LANGUAGE:C>:-ffunction-sections -fdata-sections>)
+target_link_libraries(devd PRIVATE libdriver libos)
+target_link_options(devd PRIVATE ${FASTIX_BIN_LINK_FLAGS} -static
+    -Wl,--image-base=${FASTIX_EXEC_BASE})
+set_target_properties(devd PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+add_dependencies(devd stripped_drivers)
 
 # --- test programs (embedded in procd until vfsd can load files) ---
 set(TEST_LINK_FLAGS -nostdlib -Wl,-e,_start -Wl,-z,max-page-size=4096 -Wl,--build-id=none)
@@ -84,7 +157,7 @@ function(fastix_test_program name)
 endfunction()
 
 fastix_test_program(vmtest tests/vm/vmtest.c tests/vm/test_proc.c tests/vm/test_sig.c
-                    tests/vm/test_thread.c tests/vm/test_pipe.c)
+                    tests/vm/test_thread.c tests/vm/test_pipe.c tests/vm/test_dev.c)
 target_link_options(vmtest PRIVATE ${TEST_LINK_FLAGS} -static -Wl,--image-base=${FASTIX_EXEC_BASE})
 fastix_test_program(hello_static tests/vm/hello.c)
 target_link_options(hello_static PRIVATE ${TEST_LINK_FLAGS} -static
@@ -99,7 +172,7 @@ target_link_options(exec_helper PRIVATE ${TEST_LINK_FLAGS} -static
 
 # Embed stripped copies of the programs into procd's read-only data
 # (order = image index; images.c). Unstripped files stay in build/ for debugging.
-set(FASTIX_IMAGES vmtest hello_static hello_pie exec_helper)
+set(FASTIX_IMAGES vmtest hello_static hello_pie exec_helper devd)
 set(IMAGES_ASM "${CMAKE_CURRENT_BINARY_DIR}/images.S")
 set(images_text "")
 set(image_files "")
@@ -129,6 +202,7 @@ add_executable(procd
     arch/${KernelSel4Arch}/crt0.S
     arch/${KernelSel4Arch}/vdso_tramp.S
     servers/procd/cspace.c
+    servers/procd/devboot.c
     servers/procd/exec.c
     servers/procd/frame.c
     servers/procd/futex.c
@@ -176,6 +250,8 @@ file(WRITE "${CMAKE_BINARY_DIR}/qemu.json"
   \"machine\": \"virt,secure=off,gic-version=${QEMU_GIC_VERSION}\",
   \"cpu\": \"${ARM_CPU}\",
   \"memory_mib\": ${QEMU_MEMORY},
-  \"image\": \"${FASTIX_IMAGE}\"
+  \"image\": \"${FASTIX_IMAGE}\",
+  \"virtio_rng\": true,
+  \"virtio_blk\": true
 }
 ")

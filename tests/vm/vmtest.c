@@ -418,6 +418,7 @@ _Noreturn void prog_main(uint64_t *sp)
     run_sig_tests();
     run_thread_tests();
     run_pipe_tests();
+    run_dev_tests();
     kprint_str("vmtest: failures=");
     kprint_u64((uint64_t)failures);
     kprint_str("\n");

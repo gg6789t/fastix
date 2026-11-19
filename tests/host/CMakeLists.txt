@@ -24,5 +24,11 @@ host_test(test_ut_buddy "${ROOT}/libs/libos/cap/slot_alloc.c" "${ROOT}/libs/libo
 host_test(test_elf "${ROOT}/libs/libos/elf/elf.c")
 host_test(test_slab "${ROOT}/libs/libos/alloc/slab.c")
 host_test(test_rtree "${ROOT}/libs/libos/ds/rtree.c")
+host_test(test_hashtab "${ROOT}/libs/libos/ds/hashtab.c")
+host_test(test_radix "${ROOT}/libs/libos/ds/radix.c" "${ROOT}/libs/libos/alloc/slab.c")
 host_test(test_vdso)
 host_test(test_ring "${ROOT}/libs/libos/ring/ring.c")
+host_test(test_dtb "${ROOT}/libs/libdriver/dtb.c")
+target_include_directories(test_dtb PRIVATE "${ROOT}/libs/libdriver/include")
+target_compile_definitions(test_dtb PRIVATE
+    FASTIX_QEMU_DTB_PATH="${ROOT}/build/qemu-arm-virt.dtb")

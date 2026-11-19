@@ -57,6 +57,19 @@
 #define FASTIX_PROCD_HEAP_VADDR      0x0000005000000000  /* procd heap (slab pages), grows up */
 #define FASTIX_PROCD_HEAP_MAX        134217728   /* 128 MB */
 
+/* devd and isolated driver limits. */
+#define FASTIX_DEVD_CSPACE_BITS      12          /* 4096 slots for devd */
+#define FASTIX_DEVD_RAM_UT_BITS      22          /* 4 MB RAM untyped granted to devd */
+#define FASTIX_DEVD_MAX_DEV_UTS      32          /* max device untypeds passed from BootInfo */
+#define FASTIX_DEVD_UT_NODES         512         /* buddy allocator nodes inside devd */
+#define FASTIX_DEVD_STACK_SIZE       16384       /* 16 KB devd stack */
+#define FASTIX_DEVD_PRIO             (FASTIX_DEFAULT_PRIO + 2)
+#define FASTIX_DRV_CNODE_BITS        6           /* 64 slots per isolated driver */
+#define FASTIX_DRV_STACK_SIZE        16384       /* 16 KB stack per isolated driver */
+#define FASTIX_DRV_PRIO              (FASTIX_DEFAULT_PRIO + 1)
+#define FASTIX_DRV_MAX_RESTARTS      16          /* restart cap before giving up on a driver */
+#define FASTIX_BLK_SECTOR_SIZE       512         /* standard block device sector size */
+
 /* Binary size budgets in bytes of .text+.rodata (AGENTS.md 14.4) */
 #define FASTIX_BUDGET_PROCD          196608      /* 192 KB */
 #define FASTIX_BUDGET_VFSD           163840      /* 160 KB */

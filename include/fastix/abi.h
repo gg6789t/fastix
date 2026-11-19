@@ -77,6 +77,7 @@ struct fastix_spawn_args {
 #define FASTIX_TEST_LAST_KILL   (FASTIX_IPC_LABEL_TEST_BASE + 3) /* MR0 pid -> MR1 sig, MR2 code, MR3 addr */
 #define FASTIX_TEST_IPC_COUNT   (FASTIX_IPC_LABEL_TEST_BASE + 4) /* -> MR1 calls made by caller so far */
 #define FASTIX_TEST_SPAWN       (FASTIX_IPC_LABEL_TEST_BASE + 5) /* MR0 image index -> new child pid */
+#define FASTIX_TEST_GET_DRV_EP  (FASTIX_IPC_LABEL_TEST_BASE + 6) /* MR0 drv_kind -> installs cap in FASTIX_CAP_DRV_FIRST + kind */
 
 /* Syscall groups. Each group owns the numbers from its base up to the next base. */
 #define FASTIX_SYSGRP_PROC    0x000

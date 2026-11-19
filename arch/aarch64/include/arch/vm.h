@@ -27,6 +27,12 @@ static inline seL4_Error arch_map_page(seL4_CPtr frame, seL4_CPtr vspace, seL4_W
                              attr);
 }
 
+/* Uncached, execute-never device mapping (DEVICE_nGnRnE on AArch64). */
+static inline seL4_Error arch_map_mmio_page(seL4_CPtr frame, seL4_CPtr vspace, seL4_Word vaddr)
+{
+    return seL4_ARM_Page_Map(frame, vspace, vaddr, seL4_ReadWrite, seL4_ARM_ExecuteNever);
+}
+
 static inline seL4_Error arch_unmap_page(seL4_CPtr frame)
 {
     return seL4_ARM_Page_Unmap(frame);

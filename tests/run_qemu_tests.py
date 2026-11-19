@@ -4,7 +4,7 @@
 Exit status 0 only if: at least one "[FASTIX-TEST PASS]", no "[FASTIX-TEST FAIL]",
 "[FASTIX-SUITE DONE rc=0]" was printed, and QEMU then exited by itself with status 0.
 
-Usage: tests/run_qemu_tests.py [--build DIR] [--timeout SECONDS] [--log FILE] [--quiet]
+Usage: tests/run_qemu_tests.py [--build DIR] [--disk FILE] [--timeout SECONDS] [--log FILE] [--quiet]
 """
 import argparse
 import json
@@ -13,6 +13,7 @@ import re
 import select
 import subprocess
 import sys
+import tempfile
 import time
 
 PASS_RE = re.compile(r"\[FASTIX-TEST PASS\] ([^\s:]+)")
@@ -23,10 +24,10 @@ EXIT_GRACE_S = 5.0  # time QEMU gets to exit by itself after the DONE marker
 FATAL_RE = re.compile(r"has no fault handler|KERNEL PANIC|halting\.\.\.")
 
 
-def qemu_command(build_dir):
+def qemu_command(build_dir, disk_path=None):
     with open(os.path.join(build_dir, "qemu.json")) as f:
         cfg = json.load(f)
-    return [
+    cmd = [
         cfg["binary"],
         "-machine", cfg["machine"],
         "-cpu", cfg["cpu"],
@@ -37,6 +38,20 @@ def qemu_command(build_dir):
         "-semihosting-config", "enable=on,target=native,userspace=on",
         "-kernel", cfg["image"],
     ]
+    if cfg.get("virtio_rng"):
+        cmd += ["-device", "virtio-rng-device"]
+    temp_disk = None
+    if cfg.get("virtio_blk") or disk_path is not None:
+        if disk_path is None:
+            fd, temp_disk = tempfile.mkstemp(prefix="fastix-blk-", suffix=".img")
+            os.ftruncate(fd, 1024 * 1024)  # 1 MiB raw test disk
+            os.close(fd)
+            disk_path = temp_disk
+        cmd += [
+            "-drive", f"file={disk_path},if=none,format=raw,id=hd0",
+            "-device", "virtio-blk-device,drive=hd0",
+        ]
+    return cmd, temp_disk
 
 
 def run(cmd, timeout_s, stall_s, quiet):
@@ -97,6 +112,7 @@ def main():
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--build", default=os.path.join(repo, "build"), help="build directory")
+    ap.add_argument("--disk", help="attach this raw disk image as virtio-blk")
     ap.add_argument("--timeout", type=float, default=60.0, help="seconds before giving up")
     ap.add_argument("--stall", type=float, default=90.0,
                     help="seconds without any output before treating a test as hung")
@@ -104,8 +120,13 @@ def main():
     ap.add_argument("--quiet", action="store_true", help="do not echo serial output")
     args = ap.parse_args()
 
-    lines, exit_code, why_stopped, done_after, fatal = run(qemu_command(args.build), args.timeout,
-                                                           args.stall, args.quiet)
+    cmd, temp_disk = qemu_command(args.build, args.disk)
+    try:
+        lines, exit_code, why_stopped, done_after, fatal = run(cmd, args.timeout,
+                                                               args.stall, args.quiet)
+    finally:
+        if temp_disk is not None and os.path.exists(temp_disk):
+            os.unlink(temp_disk)
     if args.log:
         with open(args.log, "w") as f:
             f.write("\n".join(lines) + "\n")

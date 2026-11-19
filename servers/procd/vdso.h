@@ -27,4 +27,7 @@ uint64_t vdso_mono_ns(void);
 /* CLOCK_REALTIME - CLOCK_MONOTONIC (0 until an RTC driver sets the wall clock). */
 uint64_t vdso_realtime_offset_ns(void);
 
+/* Updates CLOCK_REALTIME offset from an epoch timestamp in nanoseconds (seqlock-safe). */
+void vdso_set_realtime_ns(uint64_t epoch_ns);
+
 #endif /* PROCD_VDSO_H */

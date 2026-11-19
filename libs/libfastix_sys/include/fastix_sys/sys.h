@@ -144,6 +144,24 @@ static inline uint64_t fastix_clock_mono_ns(void)
     }
 }
 
+/* CLOCK_REALTIME in nanoseconds, read from the VDSO page with no IPC. */
+static inline uint64_t fastix_clock_realtime_ns(void)
+{
+    struct fastix_vdso_data *d = (struct fastix_vdso_data *)FASTIX_VDSO_ADDR;
+
+    for (;;) {
+        uint32_t seq = atomic_load_explicit(&d->seq, memory_order_acquire);
+        if (seq & 1) {
+            continue;
+        }
+        uint64_t ns = fastix_vdso_mono_ns(d, arch_read_counter()) + d->realtime_offset_ns;
+        atomic_thread_fence(memory_order_acquire);
+        if (atomic_load_explicit(&d->seq, memory_order_relaxed) == seq) {
+            return ns;
+        }
+    }
+}
+
 /* This process's info page (pid, ppid, credentials), read with no IPC. */
 static inline const struct fastix_procinfo *fastix_procinfo(void)
 {

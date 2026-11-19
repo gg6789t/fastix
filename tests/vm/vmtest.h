@@ -18,10 +18,11 @@ int vmtest_same_stats(struct vm_test_stats a, struct vm_test_stats b);
 int64_t vmtest_wait4(int64_t pid, int *status, uint64_t options);
 _Noreturn void vmtest_exit(int code);
 
-/* Phase 3 test suites */
+/* Phase 3 & 4B test suites */
 void run_proc_tests(void);
 void run_sig_tests(void);
 void run_thread_tests(void);
 void run_pipe_tests(void);
+void run_dev_tests(void);
 
 #endif /* FASTIX_VMTEST_H */

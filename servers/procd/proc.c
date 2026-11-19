@@ -14,6 +14,7 @@
 #include <libos/slab.h>
 
 #include "cspace.h"
+#include "devboot.h"
 #include "futex.h"
 #include "heap.h"
 #include "pipe.h"
@@ -414,8 +415,13 @@ int proc_spawn(const struct load_args *la, uint32_t ppid, struct proc **out)
     args.egid = p->egid;
     args.vdso_ehdr = FASTIX_VDSO_CODE_ADDR;
     if ((err = loader_load(p->vs, &args, &entry, &sp)) == 0) {
-        arch_regs_init_entry(&regs, entry, sp, 0);
-        err = proc_thread_start(p->main_thread, &regs);
+        if (p->pid == 1) {
+            err = devboot_install_devd_ep(p);
+        }
+        if (err == 0) {
+            arch_regs_init_entry(&regs, entry, sp, 0);
+            err = proc_thread_start(p->main_thread, &regs);
+        }
     }
     if (err != 0) {
         proc_discard(p);
