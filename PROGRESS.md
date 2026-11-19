@@ -17,6 +17,7 @@
 - [x] 14/14 QEMU tests pass, QEMU exit 0; 3 planted procd bugs (COW, zeroing, leak) are all caught
 
 ## Done Log
+- 2026-11-19: Published at https://github.com/gg6789t/fastix (public); repo info added to AGENTS.md 4.3.
 - 2026-11-19: **Phase 2 done.** procd is now a real server: virtual memory, copy-on-write `fork`, `wait`, a program loader, and VDSO fast paths. Verified with a clean `tools/build.sh`, `tools/test_host.sh` (6/6) and `tests/run_qemu_tests.py` (14/14, exit 0).
 - 2026-11-19: Phase 1 done (`b7cd478`): buddy allocator, process spawn/destroy, zero-leak test.
 - 2026-11-19: Phase 0 done (`54fe7c5`): seL4 17.0.0 boots procd in QEMU.

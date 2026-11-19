@@ -274,6 +274,16 @@ userland/{init, toybox, dash, awk, extra, ports}  (pure standard C + POSIX ONLY;
 
 **Hard Rule:** Nothing under `userland/` may ever `#include <sel4/...>`. Userland programs speak strictly ISO C and POSIX through `libc`. This guarantees that standard C programs work identically to native Fastix userland.
 
+### 4.3 Source Repository
+- **Home:** https://github.com/gg6789t/fastix (public). Default branch: `main`.
+- **Clone** with the pinned third-party sources (seL4 17.0.0, `seL4_tools`, `util_libs` as git submodules):
+  `git clone --recursive https://github.com/gg6789t/fastix.git`
+  (`tools/build.sh` also runs `git submodule update --init` if they are missing).
+- **Build and test:** `tools/build.sh`, `tools/test_host.sh`, `python3 tests/run_qemu_tests.py`. Host setup is in Section 3.2 and `docs/adr/0001-sel4-config.md`.
+- **Where things stand:** `PROGRESS.md` at the repo root.
+- **Commits and pushes:** only when the owner asks (`FORMAT.md` Section 6), normally one commit per finished phase or task, pushed to `origin main`. Never commit `build/`, `build-host/`, `.venv/`, or secrets. Never edit `third_party/` (submodules stay pinned).
+- **The repo is public:** everything committed (including commit author names and emails) is visible to anyone.
+
 ---
 
 ## 5. Micro-Level Foundations (The "Tiny Things")
