@@ -12,8 +12,9 @@
 - [ ] 4F `ext2`: read/write `ext2` on `virtio_blk`, reboot persistence verified across two QEMU boots, unlinked-but-open files freed on last close.
 
 ## Done Log
-- 2026-11-19: **Phase 4A & 4B done.** Added `libos` `hashtab` + `radix` and `libdriver` (`dtb`, `mmio`, `dma`, `irq`, `virtio` v1+v2), `servers/devd/`, isolated drivers (`uart_pl011`, `rtc_pl031`, `virtio_rng`, `virtio_blk`, `fault_test`), `procd/devboot.c`, `docs/adr/0002-timer.md`, and QEMU `--disk` support. Verified with `tools/build.sh` (0 Fastix warnings), `tools/test_host.sh` (10/10), `tests/run_qemu_tests.py` (39/39, exit 0), host disk persistence check, and planted-bug checks on all 8 new tests.
-- 2026-11-19: Phase 3 done: POSIX process lifecycle (`execve`, `vfork`, `posix_spawn_fast`, pgid/sid, creds, `MAP_SHARED`, orphan reparenting), VDSO signals with FPU preservation, MCS timers, threads + futex + robust lists, SPSC-ring pipes + `eventfd2`; 7/7 host + 34/34 QEMU tests.
+- 2026-11-19: Phase 4A–4B review fixes (Claude): procd and devd now share one kernel-object allocator (`libs/libos/alloc/kalloc.c`, ~150 duplicated lines removed); the sigreturn trampoline takes the seL4 syscall number and FPSR/FPCR offsets from headers with compile-time checks; the driver-restart test fails cleanly (no hang) when a restart fails (planted bug → test failed); driver READMEs; AGENTS.md note on the two driver→procd calls; `tools/test_host.sh` explains that it needs `tools/build.sh` first.
+- 2026-11-19: **Phase 4A & 4B done** (`b9915a4`). Added `libos` `hashtab` + `radix` and `libdriver` (`dtb`, `mmio`, `dma`, `irq`, `virtio` v1+v2), `servers/devd/`, isolated drivers (`uart_pl011`, `rtc_pl031`, `virtio_rng`, `virtio_blk`, `fault_test`), `procd/devboot.c`, `docs/adr/0002-timer.md`, and QEMU `--disk` support. Verified with `tools/build.sh` (0 Fastix warnings), `tools/test_host.sh` (10/10), `tests/run_qemu_tests.py` (39/39, exit 0), host disk persistence check, and planted-bug checks on all 8 new tests.
+- 2026-11-19: Phase 3 done (`d374e19`, cleanup `140cb42`): POSIX process lifecycle (`execve`, `vfork`, `posix_spawn_fast`, pgid/sid, creds, `MAP_SHARED`, orphan reparenting), VDSO signals with FPU preservation, MCS timers, threads + futex + robust lists, SPSC-ring pipes + `eventfd2`; 7/7 host + 34/34 QEMU tests.
 - 2026-11-19: Phase 2 done: VMA/COW virtual memory, static+PIE ELF64 loader, VDSO clock/procinfo; 6/6 host + 14/14 QEMU tests.
 - 2026-11-19: Phase 1 done (`b7cd478`): buddy allocator, process spawn/destroy, zero-leak test.
 - 2026-11-19: Phase 0 done (`54fe7c5`): seL4 17.0.0 boots procd in QEMU.
@@ -24,6 +25,7 @@
 3. Steps 4E–4F: unified page cache and `ext2` on `virtio_blk` with reboot persistence.
 
 ## Known Issues & Open Questions
+- `virtio_blk` moves one 512-byte sector per message (slow). Before ext2 (4F) its data path must DMA directly into `vfsd` page-cache frames (AGENTS.md 6.3 D).
 - On QEMU `virt`, 512-byte VirtIO-MMIO slots pack 8 per 4 KB page (`0x0a003000..0x0a003fff`), so `virtio_rng` and `virtio_blk` share a copy of that 4 KB MMIO page cap (isolated from PL011, PL031, GIC, and all RAM/DMA).
 - Driver ELFs are embedded in `devd` (`.fastix_drivers`) and `devd` is embedded in `procd` until Step 4D (`cpiofs` initramfs) loads them from disk/initramfs.
 - `procd` still holds the temporary 64-slot FD table (`pipe.c`) for `pipe2`/`eventfd2` until Step 4C moves FD numbering to `vfsd` (`AGENTS.md 6.4`).

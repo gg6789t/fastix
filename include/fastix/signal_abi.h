@@ -97,6 +97,8 @@
 #define FASTIX_VDSO_SIGRETURN_OFF 0x200
 #define FASTIX_SIGFRAME_EP_OFF    16
 #define FASTIX_SIGFRAME_FPU_OFF   416
+#define FASTIX_FPU_FPSR_OFF       512 /* within struct fastix_fpu_state */
+#define FASTIX_FPU_FPCR_OFF       516
 #define FASTIX_SIGFRAME_MAGIC     0x465853494746524DULL
 
 /* seL4_MessageInfo word for FASTIX_SYS_rt_sigreturn (label=85, length=1). */
@@ -181,6 +183,8 @@ _Static_assert(offsetof(struct fastix_sigframe, uc) +
                    offsetof(struct fastix_sigcontext, fpu) == FASTIX_SIGFRAME_FPU_OFF,
                "sigframe FPU offset mismatch");
 _Static_assert((FASTIX_SIGFRAME_FPU_OFF & 15) == 0, "FPU state must be 16-byte aligned");
+_Static_assert(offsetof(struct fastix_fpu_state, fpsr) == FASTIX_FPU_FPSR_OFF, "fpsr offset mismatch");
+_Static_assert(offsetof(struct fastix_fpu_state, fpcr) == FASTIX_FPU_FPCR_OFF, "fpcr offset mismatch");
 
 #endif /* !__ASSEMBLER__ */
 

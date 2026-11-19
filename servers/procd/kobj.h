@@ -10,13 +10,9 @@
 #include <stdint.h>
 
 #include <libos/compiler.h>
+#include <libos/kalloc.h>
 #include <libos/ut_buddy.h>
 #include <sel4/sel4.h>
-
-struct kobj {
-    struct ut_block *block; /* untyped block the object was made from */
-    seL4_CPtr cap;          /* object cap in procd's root CNode */
-};
 
 /* Totals used to prove nothing leaked: equal before and after a create/destroy cycle. */
 struct kobj_stats {

@@ -4,8 +4,9 @@
 [seL4](https://sel4.systems) microkernel, written in C. The idea is something like QNX, but open
 source: a tiny kernel, with everything else in small isolated programs called servers.
 
-> **Status: early development.** Phases 0–3 of 11 are done. Fastix boots in QEMU and runs test
-> programs; there is no shell or libc yet. See [`PROGRESS.md`](PROGRESS.md).
+> **Status: early development.** Phases 0–3 and Phase 4A–4B (`devd` and isolated hardware drivers)
+> are done. Fastix boots in QEMU with isolated drivers and runs automated test suites; there is no
+> VFS, shell, or libc yet. See [`PROGRESS.md`](PROGRESS.md).
 
 ## Goals
 
@@ -25,11 +26,11 @@ The full design and roadmap is in [`AGENTS.md`](AGENTS.md).
 | 1 | Untyped/capability allocators, isolated processes, IPC, zero-leak teardown | Done |
 | 2 | Virtual memory (`mmap`, copy-on-write, demand paging), ELF + PIE loader, VDSO clock | Done |
 | 3 | `execve`, `vfork`/`posix_spawn`, signals, timers, threads, futex, pipes, `eventfd` | Done |
-| 4 | Drivers, `vfsd`, page cache, filesystems (`tmpfs`, `ext2`, ...) | Next |
+| 4 | `devd` + isolated drivers (4A–4B), `vfsd`, page cache, filesystems (4C–4F) | In progress (4A–4B done) |
 | 5–10 | musl libc, shell + userland (toybox, dash), networking, SMP, x86_64, tuning | Planned |
 
-Everything is tested automatically: 7 host unit-test programs (randomized, run under
-AddressSanitizer and UndefinedBehaviorSanitizer) and 34 behavioural tests that boot Fastix
+Everything is tested automatically: 10 host unit-test programs (randomized, run under
+AddressSanitizer and UndefinedBehaviorSanitizer) and 39 behavioural tests that boot Fastix
 headless in QEMU.
 
 ## Architecture
@@ -39,7 +40,9 @@ headless in QEMU.
  ─────────────────────────────────────────────────────────────────────
  procd   process manager and seL4 root task: processes, threads, memory,
          signals, timers, futex, pipes                       [done]
- vfsd, devd, ttyd, netd, drivers                             [planned]
+ devd    device manager & supervisor + isolated drivers
+         (uart_pl011, rtc_pl031, virtio_rng, virtio_blk)     [done]
+ vfsd, ttyd, netd                                            [planned]
  ─────────────────────────────────────────────────────────────────────
  seL4 microkernel 17.0.0 (MCS, AArch64), unmodified
 ```
@@ -66,9 +69,12 @@ cd build && python3 ../tests/run_qemu_tests.py   # boots Fastix in QEMU and runs
 
 | Path | Contents |
 | :--- | :--- |
-| `include/fastix/` | Shared ABI and constants (syscalls, memory layout, errno, signals) |
+| `include/fastix/` | Shared ABI and constants (syscalls, memory layout, errno, signals, driver protocols) |
 | `servers/procd/` | The process manager and root task ([README](servers/procd/README.md)) |
-| `libs/libos/` | Small freestanding library for servers (allocators, trees, ELF reader, rings) |
+| `servers/devd/` | Device manager, DTB parser, and isolated driver supervisor ([README](servers/devd/README.md)) |
+| `drivers/` | Isolated hardware drivers (`uart_pl011`, `rtc_pl031`, `virtio_rng`, `virtio_blk`, `fault_test`) |
+| `libs/libos/` | Small freestanding library for servers (allocators, trees, hash/radix, ELF reader, rings) |
+| `libs/libdriver/` | Shared driver SDK (FDT/DTB parser, MMIO, DMA, IRQ, VirtIO-MMIO) |
 | `libs/libfastix_sys/` | User-side syscall and VDSO helpers (musl builds on this later) |
 | `arch/aarch64/` | CPU-specific code |
 | `tests/` | Host unit tests and QEMU test programs |

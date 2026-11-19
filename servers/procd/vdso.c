@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include <arch/counter.h>
+#include <arch/sel4_sysno.h>
 #include <fastix/config.h>
 #include <libos/assert.h>
 
@@ -10,6 +11,8 @@
 #include "vdso.h"
 
 extern const uint8_t arch_vdso_code_start[], arch_vdso_code_end[];
+
+_Static_assert(ARCH_SEL4_SYS_CALL == seL4_SysCall, "arch/sel4_sysno.h disagrees with libsel4");
 
 static struct frame *page;
 static struct frame *code_page;

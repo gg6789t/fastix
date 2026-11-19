@@ -112,7 +112,7 @@ static int load_drv_elf(struct drv_inst *d, const struct drv_image *img, uint64_
             if (d->n_frames >= DEVD_MAX_DRV_FRAMES) {
                 return -FASTIX_ENOMEM;
             }
-            struct dkobj *fr = &d->frames[d->n_frames];
+            struct kobj *fr = &d->frames[d->n_frames];
             err = dkobj_alloc(ARCH_FRAME_OBJECT, 0, fr);
             if (err != 0) {
                 return err;
@@ -225,7 +225,7 @@ static int drv_build_and_run(struct drv_inst *d)
             err = -FASTIX_ENOMEM;
             goto fail;
         }
-        struct dkobj *spg = &d->frames[d->n_frames];
+        struct kobj *spg = &d->frames[d->n_frames];
         if ((err = dkobj_alloc(ARCH_FRAME_OBJECT, 0, spg)) != 0) {
             goto fail;
         }

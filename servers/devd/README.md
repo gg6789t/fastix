@@ -4,7 +4,7 @@
 
 ## Responsibilities
 - Parse the runtime Flattened Device Tree (FDT) supplied by seL4 (`SEL4_BOOTINFO_HEADER_FDT`) via `libdriver/dtb`.
-- Carve exact 4 KB MMIO device frames by binary-splitting Device Untypeds (`kobj.c`).
+- Carve exact 4 KB MMIO device frames by binary-splitting Device Untypeds (`kobj.c`). Kernel-object allocation itself is the shared `libs/libos/alloc/kalloc.c` (same code as procd).
 - Probe QEMU `virt` `virtio,mmio` slots to locate VirtIO-RNG (`DeviceID=4`) and VirtIO-BLK (`DeviceID=2`). Note: QEMU `virt` packs eight 512-byte VirtIO-MMIO slots per 4 KB page (`0x0a003000..0x0a003fff`), so VirtIO drivers on the same 4 KB hardware page receive a copy of that 4 KB MMIO frame cap with their exact slot offset while remaining isolated from PL011, PL031, GIC, and all other drivers' DMA/RAM.
 - Launch isolated drivers (`uart_pl011`, `rtc_pl031`, `virtio_rng`, `virtio_blk`, `fault_test`), each with its own VSpace, CSpace, TCB, SchedContext, IPC buffer, stack, and only its own MMIO/DMA/IRQ capabilities.
 - Register each driver's persistent `service_ep` downward with `procd` (Rank 20 → Rank 10). `devd` never makes synchronous `seL4_Call`s to any driver.

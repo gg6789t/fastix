@@ -20,7 +20,7 @@
 #include "devd_internal.h"
 
 static struct drv_inst drivers[FASTIX_DRV_COUNT];
-static struct dkobj server_reply;
+static struct kobj server_reply;
 static uint32_t dtb_total_size;
 static uint32_t active_drv_count;
 

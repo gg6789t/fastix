@@ -6,6 +6,7 @@
  *   0x100: __fastix_sigenter  (saves q0..q31, fpsr, fpcr; jumps to handler)
  *   0x200: __fastix_sigreturn (restores q0..q31, fpsr, fpcr; calls rt_sigreturn)
  */
+#include <arch/sel4_sysno.h>
 #include <fastix/signal_abi.h>
 
     .section .rodata.vdso_code, "a"
@@ -56,8 +57,8 @@ arch_vdso_code_start:
     stp     q30, q31, [x9, #480]
     mrs     x10, fpsr
     mrs     x11, fpcr
-    str     w10, [x9, #512]
-    str     w11, [x9, #516]
+    str     w10, [x9, #FASTIX_FPU_FPSR_OFF]
+    str     w11, [x9, #FASTIX_FPU_FPCR_OFF]
     br      x3
 
     .org    FASTIX_VDSO_SIGRETURN_OFF
@@ -82,15 +83,15 @@ arch_vdso_code_start:
     ldp     q26, q27, [x9, #416]
     ldp     q28, q29, [x9, #448]
     ldp     q30, q31, [x9, #480]
-    ldr     w10, [x9, #512]
-    ldr     w11, [x9, #516]
+    ldr     w10, [x9, #FASTIX_FPU_FPSR_OFF]
+    ldr     w11, [x9, #FASTIX_FPU_FPCR_OFF]
     msr     fpsr, x10
     msr     fpcr, x11
     ldr     x0, [sp, #FASTIX_SIGFRAME_EP_OFF]
     movz    x1, #(FASTIX_SIGRETURN_MSGINFO & 0xFFFF)
     movk    x1, #((FASTIX_SIGRETURN_MSGINFO >> 16) & 0xFFFF), lsl #16
     mov     x2, sp
-    mov     x7, #-1             /* seL4_SysCall */
+    mov     x7, #ARCH_SEL4_SYS_CALL
     svc     #0
 1:  b       1b
 

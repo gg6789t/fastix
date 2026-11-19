@@ -62,6 +62,7 @@ endfunction()
 # --- libos: freestanding runtime for servers ---
 add_library(libos STATIC
     libs/libos/assert.c
+    libs/libos/alloc/kalloc.c
     libs/libos/alloc/slab.c
     libs/libos/alloc/ut_buddy.c
     libs/libos/cap/slot_alloc.c

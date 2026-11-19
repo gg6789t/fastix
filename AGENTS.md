@@ -892,6 +892,8 @@ No phase may be declared complete until **ALL** its exit criteria pass and are v
   - Host unit tests + randomized fuzz tests on `ext2` and path-walker (100+ seeds).
   - QEMU tests: write files to `ext2` disk image, `sync`, reboot QEMU, verify files & metadata persist byte-for-byte; verify `mmap(MAP_SHARED)` writes are immediately visible to `read()` and vice versa; verify unlinked-but-open file reads/writes work and free blocks on final `close()`; verify driver isolation by faulting a test driver and observing `devd` clean recovery.
 
+- *Implementation note (2026-11-19, Phase 4B):* two narrow, downward exceptions to "drivers call `procd` only for memory/caps at init" (Section 14.5): `rtc_pl031` sends the wall-clock time to `procd` once at start (`FASTIX_SRV_SET_REALTIME_NS`), and `devd` registers driver endpoints with `procd` (`FASTIX_SRV_REGISTER_DRV`, used by test hooks until `vfsd`/`devfs` exposes devices). Both go strictly downward and `procd` checks the sender's badge. The timer stays `ticker.c` on `qemu-arm-virt` (`docs/adr/0002-timer.md`). Kernel-object allocation shared by `procd` and `devd` lives in `libs/libos/alloc/kalloc.c`.
+
 ### Phase 5: Full `musl libc` Port (Static) & `fastix-cc` Sysroot
 - **Objectives:** Any portable C17/POSIX program compiles with `fastix-cc` and runs on Fastix.
 - **Deliverables:**

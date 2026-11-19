@@ -11,15 +11,11 @@
 #include <fastix/dev_proto.h>
 #include <libos/compiler.h>
 #include <libos/ut_buddy.h>
+#include <libos/kalloc.h>
 #include <sel4/sel4.h>
 
 #define DEVD_MAX_DRV_PTS    16
 #define DEVD_MAX_DRV_FRAMES 48
-
-struct dkobj {
-    struct ut_block *block;
-    seL4_CPtr cap;
-};
 
 struct drv_image {
     const char *name;
@@ -50,32 +46,32 @@ struct drv_inst {
     uint32_t restarts;
 
     /* Persistent across restarts so clients never lose their endpoint cap. */
-    struct dkobj service_ep;
+    struct kobj service_ep;
     seL4_CPtr mmio_master_cap; /* owned by kobj.c mmio cache, never freed */
     seL4_CPtr irq_master_cap;  /* claimed once from IRQControl, reused on restart */
 
     /* Per-generation objects destroyed and recreated on every restart. */
-    struct dkobj vspace;
-    struct dkobj cnode;
-    struct dkobj tcb;
-    struct dkobj sc;
-    struct dkobj reply;
-    struct dkobj irq_ntfn;
-    struct dkobj ipcbuf;
-    struct dkobj bootinfo;
-    struct dkobj dma[2];
+    struct kobj vspace;
+    struct kobj cnode;
+    struct kobj tcb;
+    struct kobj sc;
+    struct kobj reply;
+    struct kobj irq_ntfn;
+    struct kobj ipcbuf;
+    struct kobj bootinfo;
+    struct kobj dma[2];
     seL4_CPtr fault_ep_badged;
 
-    struct dkobj pts[DEVD_MAX_DRV_PTS];
+    struct kobj pts[DEVD_MAX_DRV_PTS];
     size_t n_pts;
-    struct dkobj frames[DEVD_MAX_DRV_FRAMES];
+    struct kobj frames[DEVD_MAX_DRV_FRAMES];
     size_t n_frames;
 };
 
 /* kobj.c */
 LIBOS_MUST_CHECK int devd_kobj_init(const struct devd_bootinfo *bi);
-LIBOS_MUST_CHECK int dkobj_alloc(seL4_Word type, seL4_Word param, struct dkobj *out);
-void dkobj_free(struct dkobj *obj);
+LIBOS_MUST_CHECK int dkobj_alloc(seL4_Word type, seL4_Word param, struct kobj *out);
+void dkobj_free(struct kobj *obj);
 LIBOS_MUST_CHECK int dslot_get(seL4_CPtr *slot);
 void dslot_put(seL4_CPtr slot);
 LIBOS_MUST_CHECK int dslot_delete_and_put(seL4_CPtr slot);

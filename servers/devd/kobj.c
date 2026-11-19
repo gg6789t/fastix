@@ -7,6 +7,7 @@
 #include <fastix/errno.h>
 #include <libdriver/mmio.h>
 #include <libos/assert.h>
+#include <libos/kalloc.h>
 #include <libos/slot_alloc.h>
 
 #include "devd_internal.h"
@@ -31,52 +32,27 @@ struct mmio_cache_entry {
 static uint64_t slot_bits[SLOT_ALLOC_WORDS(DEVD_FREE_SLOTS)];
 static struct slot_alloc slots;
 static struct ut_block ut_nodes[FASTIX_DEVD_UT_NODES];
-static struct ut_buddy buddy;
+static struct kalloc ka;
 
 static struct dev_ut_entry dev_pool[DEVD_DEV_POOL_MAX];
 static size_t dev_pool_len;
 static struct mmio_cache_entry mmio_cache[DEVD_MMIO_CACHE];
 static size_t mmio_cache_len;
 
-static struct dkobj own_pts[DEVD_OWN_PT_MAX];
+static struct kobj own_pts[DEVD_OWN_PT_MAX];
 static size_t own_pt_len;
-
-static int sel4_to_err(seL4_Error err)
-{
-    switch (err) {
-    case seL4_NoError:
-        return 0;
-    case seL4_NotEnoughMemory:
-        return -FASTIX_ENOMEM;
-    default:
-        return -FASTIX_EINVAL;
-    }
-}
 
 static seL4_Error retype_one(seL4_CPtr parent, seL4_Word type, seL4_Word param, seL4_CPtr slot)
 {
     return seL4_Untyped_Retype(parent, type, param, DEVD_CAP_SELF_CNODE, 0, 0, slot, 1);
 }
 
-static int backend_split(void *ctx, uint64_t parent, uint64_t slot, unsigned bits)
-{
-    (void)ctx;
-    return sel4_to_err(retype_one(parent, seL4_UntypedObject, bits, slot));
-}
-
-static int backend_revoke(void *ctx, uint64_t parent)
-{
-    (void)ctx;
-    return sel4_to_err(seL4_CNode_Revoke(DEVD_CAP_SELF_CNODE, parent, seL4_WordBits));
-}
-
 int devd_kobj_init(const struct devd_bootinfo *bi)
 {
     slot_alloc_init(&slots, DEVD_CAP_FREE_FIRST, DEVD_FREE_SLOTS, slot_bits);
-    ut_buddy_init(&buddy, ut_nodes, FASTIX_DEVD_UT_NODES, &slots,
-                  (struct ut_backend){ backend_split, backend_revoke, NULL });
+    kalloc_init(&ka, ut_nodes, FASTIX_DEVD_UT_NODES, &slots, DEVD_CAP_SELF_CNODE, retype_one);
 
-    int err = ut_buddy_add(&buddy, DEVD_CAP_RAM_UT, bi->ram_ut_paddr, bi->ram_ut_bits);
+    int err = ut_buddy_add(&ka.buddy, DEVD_CAP_RAM_UT, bi->ram_ut_paddr, bi->ram_ut_bits);
     if (err != 0) {
         return err;
     }
@@ -95,71 +71,14 @@ int devd_kobj_init(const struct devd_bootinfo *bi)
     return 0;
 }
 
-static unsigned object_bits(seL4_Word type, seL4_Word param)
+int dkobj_alloc(seL4_Word type, seL4_Word param, struct kobj *out)
 {
-    switch (type) {
-    case seL4_TCBObject:
-        return seL4_TCBBits;
-    case seL4_EndpointObject:
-        return seL4_EndpointBits;
-    case seL4_NotificationObject:
-        return seL4_NotificationBits;
-    case seL4_ReplyObject:
-        return seL4_ReplyBits;
-    case seL4_SchedContextObject:
-        return (unsigned)param;
-    case seL4_CapTableObject:
-        return (unsigned)param + seL4_SlotBits;
-    case ARCH_FRAME_OBJECT:
-        return seL4_PageBits;
-    case ARCH_PAGE_TABLE_OBJECT:
-        return seL4_PageTableBits;
-    case ARCH_VSPACE_OBJECT:
-        return seL4_VSpaceBits;
-    default:
-        return 0;
-    }
+    return kalloc_obj(&ka, type, param, out);
 }
 
-int dkobj_alloc(seL4_Word type, seL4_Word param, struct dkobj *out)
+void dkobj_free(struct kobj *obj)
 {
-    unsigned bits = object_bits(type, param);
-    if (bits == 0) {
-        return -FASTIX_EINVAL;
-    }
-    struct ut_block *blk = NULL;
-    int err = ut_buddy_alloc(&buddy, bits < UT_MIN_BITS ? UT_MIN_BITS : bits, &blk);
-    if (err != 0) {
-        return err;
-    }
-    uint64_t slot = 0;
-    err = slot_alloc_get(&slots, &slot);
-    if (err != 0) {
-        (void)ut_buddy_free(&buddy, blk);
-        return err;
-    }
-    err = sel4_to_err(retype_one(blk->slot, type, param, slot));
-    if (err != 0) {
-        slot_alloc_put(&slots, slot);
-        (void)ut_buddy_free(&buddy, blk);
-        return err;
-    }
-    out->block = blk;
-    out->cap = slot;
-    return 0;
-}
-
-void dkobj_free(struct dkobj *obj)
-{
-    if (obj->block == NULL) {
-        return;
-    }
-    if (ut_buddy_free(&buddy, obj->block) != 0) {
-        libos_assert(0 && "devd: failed to revoke untyped block");
-    }
-    slot_alloc_put(&slots, obj->cap);
-    obj->block = NULL;
-    obj->cap = seL4_CapNull;
+    kalloc_free(&ka, obj);
 }
 
 int dslot_get(seL4_CPtr *slot)
@@ -186,7 +105,7 @@ int dslot_delete_and_put(seL4_CPtr slot)
     }
     seL4_Error err = seL4_CNode_Delete(DEVD_CAP_SELF_CNODE, slot, seL4_WordBits);
     slot_alloc_put(&slots, slot);
-    return sel4_to_err(err);
+    return kalloc_sel4_err(err);
 }
 
 /* Carves a 4 KB device frame at exact physical address page_paddr by binary-splitting
@@ -239,7 +158,7 @@ int devd_mmio_frame(uint64_t page_paddr, seL4_CPtr *cap_out)
             se = retype_one(parent, seL4_UntypedObject, child_bits, s1);
         }
         if (se != seL4_NoError) {
-            return sel4_to_err(se);
+            return kalloc_sel4_err(se);
         }
 
         if (page_paddr < base + half) {
@@ -262,7 +181,7 @@ int devd_mmio_frame(uint64_t page_paddr, seL4_CPtr *cap_out)
     seL4_Error se = retype_one(dev_pool[idx].cap, ARCH_FRAME_OBJECT, 0, frame_cap);
     if (se != seL4_NoError) {
         dslot_put(frame_cap);
-        return sel4_to_err(se);
+        return kalloc_sel4_err(se);
     }
 
     dev_pool[idx] = dev_pool[--dev_pool_len];
@@ -281,9 +200,9 @@ int devd_map_scratch(seL4_CPtr frame, bool is_mmio)
             return 0;
         }
         if (err != seL4_FailedLookup || lvl == ARCH_PT_LEVELS || own_pt_len >= DEVD_OWN_PT_MAX) {
-            return sel4_to_err(err);
+            return kalloc_sel4_err(err);
         }
-        struct dkobj pt;
+        struct kobj pt;
         int aerr = dkobj_alloc(ARCH_PAGE_TABLE_OBJECT, 0, &pt);
         if (aerr != 0) {
             return aerr;
@@ -291,7 +210,7 @@ int devd_map_scratch(seL4_CPtr frame, bool is_mmio)
         err = arch_map_page_table(pt.cap, DEVD_CAP_SELF_VSPACE, DEVD_VADDR_SCRATCH);
         if (err != seL4_NoError) {
             dkobj_free(&pt);
-            return sel4_to_err(err);
+            return kalloc_sel4_err(err);
         }
         own_pts[own_pt_len++] = pt;
     }
@@ -306,7 +225,7 @@ void devd_unmap_scratch(seL4_CPtr frame)
 void devd_kobj_stats(uint64_t *free_bytes, uint64_t *slots_used)
 {
     if (free_bytes != NULL) {
-        *free_bytes = buddy.free_bytes;
+        *free_bytes = ka.buddy.free_bytes;
     }
     if (slots_used != NULL) {
         *slots_used = slots.used;

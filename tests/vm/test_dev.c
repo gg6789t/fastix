@@ -289,18 +289,22 @@ static void t_fault_restart(void)
 
         /* Crash and recover 3 times; verify caller gets -EIO, driver restarts with
          * incremented generation on the same endpoint, and 0 bytes/slots leak in devd. */
-        for (uint64_t g = 1; g <= 3; g++) {
+        for (uint64_t g = 1; g <= 3 && ok; g++) {
             (void)seL4_Call(drv_cptr(FASTIX_DRV_FAULT),
                             seL4_MessageInfo_new(FAULT_OP_CRASH, 0, 0, 0));
             ok &= (int64_t)seL4_GetMR(0) == -FASTIX_EIO;
 
+            /* Ask devd first (it always answers at once): if the restart failed, nothing
+             * listens on the driver endpoint and a PING would block forever. */
+            ok &= devd_drv_status(FASTIX_DRV_FAULT, &run, &restarts, NULL, NULL) == 0;
+            ok &= (run == 1 && restarts == g);
+            if (!ok) {
+                break;
+            }
             seL4_SetMR(0, 100 + g);
             (void)seL4_Call(drv_cptr(FASTIX_DRV_FAULT),
                             seL4_MessageInfo_new(FAULT_OP_PING, 0, 0, 1));
             ok &= (int64_t)seL4_GetMR(0) == 0 && seL4_GetMR(1) == 101 + g && seL4_GetMR(2) == g;
-
-            ok &= devd_drv_status(FASTIX_DRV_FAULT, &run, &restarts, NULL, NULL) == 0;
-            ok &= (run == 1 && restarts == g);
         }
 
         uint64_t free1 = 0, slots1 = 0;
