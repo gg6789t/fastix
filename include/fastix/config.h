@@ -38,6 +38,16 @@
 #define FASTIX_SCM_MAX_FD            253
 #define FASTIX_UNIX_INFLIGHT_MAX     4096
 
+/* Scheduling defaults for user threads (MCS budget = period = full CPU share). */
+#define FASTIX_DEFAULT_PRIO          100
+#define FASTIX_DEFAULT_TIMESLICE_US  5000
+
+/* procd internal limits and its own address-space layout (not visible to users). */
+#define FASTIX_PROCD_MAX_SLOTS       4096        /* procd root CNode slots it manages */
+#define FASTIX_PROCD_UT_NODES        2048        /* untyped blocks tracked by the buddy allocator */
+#define FASTIX_PROCD_MAX_PROC_OBJS   64          /* kernel objects per process (Phase 1 bound) */
+#define FASTIX_PROCD_SCRATCH_VADDR   0x0000004000000000  /* procd window for filling frames */
+
 /* Binary size budgets in bytes of .text+.rodata (AGENTS.md 14.4) */
 #define FASTIX_BUDGET_PROCD          196608      /* 192 KB */
 #define FASTIX_BUDGET_VFSD           163840      /* 160 KB */

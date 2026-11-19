@@ -10,6 +10,7 @@ set(QEMU_MEMORY "1024" CACHE STRING "" FORCE)  # MiB; the runner reads it back f
 # Kernel features (AGENTS.md 5.1)
 set(KernelIsMCS ON CACHE BOOL "" FORCE)
 set(KernelFastpath ON CACHE BOOL "" FORCE)
+set(KernelArmExportVCNTUser ON CACHE BOOL "" FORCE)  # user-mode clock reads (VDSO, benchmarks)
 set(KernelMaxNumNodes 1 CACHE STRING "" FORCE)   # SMP comes in Phase 9
 
 # Phase 0 is a debug build: seL4 debug console on, verification build off.

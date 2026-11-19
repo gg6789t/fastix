@@ -1,7 +1,7 @@
 /*
  * main.c - procd entry. procd is the seL4 root task.
- * Phase 0: print a summary of the memory and capabilities seL4 handed us,
- * check it is sane, report a test result, and stop QEMU.
+ * Boot: print and check what seL4 handed us, set up the kernel object
+ * allocator, run the Phase 1 self-test, report results, and stop QEMU.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -11,7 +11,10 @@
 #include <libos/kprint.h>
 #include <sel4/sel4.h>
 
+#include "kobj.h"
 #include "procd.h"
+#include "selftest.h"
+#include "vm.h"
 
 _Static_assert(FASTIX_VSPACE_USER_END - 1 <= seL4_UserTop,
                "Fastix user layout does not fit the seL4 user address space");
@@ -80,6 +83,8 @@ static const char *check_bootinfo(const seL4_BootInfo *bi, const struct untyped_
 
 _Noreturn void procd_main(seL4_BootInfo *bi)
 {
+    /* libsel4 passes extra message words and caps through this buffer. */
+    seL4_SetIPCBuffer(bi->ipcBuffer);
     kprint_str("fastix: procd started (seL4 root task)\n");
 
     struct untyped_totals t = sum_untypeds(bi);
@@ -98,10 +103,17 @@ _Noreturn void procd_main(seL4_BootInfo *bi)
     kprint_str("\n");
 
     const char *problem = check_bootinfo(bi, &t);
+    if (problem == NULL && kobj_init(bi) != 0) {
+        problem = "kernel object allocator setup failed";
+    }
+    if (problem == NULL && vm_init() != 0) {
+        problem = "scratch window setup failed";
+    }
     int rc = (problem == NULL) ? 0 : 1;
 
     if (problem == NULL) {
         kprint_str("[FASTIX-TEST PASS] bootinfo_summary\n");
+        rc = selftest_run(bi) == 0 ? 0 : 1;
     } else {
         kprint_str("[FASTIX-TEST FAIL] bootinfo_summary: ");
         kprint_str(problem);

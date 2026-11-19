@@ -15,10 +15,12 @@ import subprocess
 import sys
 import time
 
-PASS_RE = re.compile(r"\[FASTIX-TEST PASS\] (\S+)")
-FAIL_RE = re.compile(r"\[FASTIX-TEST FAIL\] (\S+)")
+PASS_RE = re.compile(r"\[FASTIX-TEST PASS\] ([^\s:]+)")
+FAIL_RE = re.compile(r"\[FASTIX-TEST FAIL\] ([^\s:]+)")
 DONE_RE = re.compile(r"\[FASTIX-SUITE DONE rc=(-?\d+)\]")
 EXIT_GRACE_S = 5.0  # time QEMU gets to exit by itself after the DONE marker
+# seL4 debug kernel messages that mean the system cannot finish; stop at once.
+FATAL_RE = re.compile(r"has no fault handler|KERNEL PANIC|halting\.\.\.")
 
 
 def qemu_command(build_dir):
@@ -38,12 +40,13 @@ def qemu_command(build_dir):
 
 
 def run(cmd, timeout_s, quiet):
-    """Run QEMU, return (serial_lines, qemu_exit_code_or_None, timed_out, done_after_s)."""
+    """Run QEMU, return (lines, exit_code_or_None, timed_out, done_after_s, fatal_line)."""
     start = time.monotonic()
     proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
     lines, pending = [], b""
     done_at = None
+    fatal = None
     timed_out = False
     while True:
         now = time.monotonic()
@@ -66,6 +69,9 @@ def run(cmd, timeout_s, quiet):
                 print(line, flush=True)
             if done_at is None and DONE_RE.search(line):
                 done_at = time.monotonic()
+            if fatal is None and FATAL_RE.search(line):
+                fatal = line
+                done_at = time.monotonic()  # collect a few more lines, then stop
     if pending:
         lines.append(pending.decode("utf-8", "replace").rstrip("\r"))
     try:
@@ -75,7 +81,7 @@ def run(cmd, timeout_s, quiet):
         proc.wait()
         exit_code = None  # did not exit by itself
     done_after = None if done_at is None else done_at - start
-    return lines, exit_code, timed_out, done_after
+    return lines, exit_code, timed_out, done_after, fatal
 
 
 def main():
@@ -87,7 +93,7 @@ def main():
     ap.add_argument("--quiet", action="store_true", help="do not echo serial output")
     args = ap.parse_args()
 
-    lines, exit_code, timed_out, done_after = run(qemu_command(args.build), args.timeout,
+    lines, exit_code, timed_out, done_after, fatal = run(qemu_command(args.build), args.timeout,
                                                   args.quiet)
     if args.log:
         with open(args.log, "w") as f:
@@ -98,6 +104,8 @@ def main():
     done = [int(m.group(1)) for line in lines for m in [DONE_RE.search(line)] if m]
 
     problems = []
+    if fatal:
+        problems.append("seL4 reported a fatal error: " + fatal.strip())
     if timed_out:
         problems.append(f"timed out after {args.timeout:.0f}s without a DONE marker")
     if not done:

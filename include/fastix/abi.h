@@ -12,6 +12,9 @@
 #define FASTIX_IPC_INLINE_PATH_MAX   64  /* short paths may travel in MRs */
 #define FASTIX_IPC_INLINE_DATA_MAX   48  /* small reads/writes may travel in MRs */
 
+/* Labels at or above this value are reserved for test-only protocols. */
+#define FASTIX_IPC_LABEL_TEST_BASE   0xF00
+
 /* Reply registers. MR0 >= 0 is success, MR0 in [-4095, -1] is -errno. */
 #define FASTIX_REPLY_MR_RET          0
 #define FASTIX_REPLY_MR_RET2         1   /* second result (pipe fds, 64-bit offset, ...) */
@@ -239,6 +242,7 @@ _Static_assert(FASTIX_SYS_shmctl < FASTIX_SYSGRP_FS, "sync group overflow");
 _Static_assert(FASTIX_SYS_copy_file_range < FASTIX_SYSGRP_NET, "fs group overflow");
 _Static_assert(FASTIX_SYS_epoll_pwait < FASTIX_SYSGRP_SYS, "net group overflow");
 _Static_assert(FASTIX_SYS_arch_prctl < FASTIX_SYSGRP_END, "sys group overflow");
-_Static_assert(FASTIX_SYSGRP_END <= (1 << FASTIX_IPC_LABEL_BITS), "syscalls exceed label bits");
+_Static_assert(FASTIX_SYSGRP_END <= FASTIX_IPC_LABEL_TEST_BASE, "syscalls overlap test labels");
+_Static_assert(FASTIX_IPC_LABEL_TEST_BASE < (1 << FASTIX_IPC_LABEL_BITS), "test labels exceed label bits");
 
 #endif /* FASTIX_ABI_H */

@@ -101,7 +101,7 @@ Every agent or contributor MUST obey these rules on every task:
 Fastix code MUST be simple enough that a new reader understands any function in about two minutes, AND fast. These rules make both possible:
 
 1. **Simplest Correct Version First:** Write the plain, obvious implementation first and make it pass its tests. Optimize only after a `bench/` measurement shows that code is on a hot path, and keep the before/after numbers in the commit message. "Measure, then optimize." Never optimize by guessing.
-2. **Design for Speed, Implement Simply:** Speed decisions that are expensive to retrofit are part of the architecture from Day 1: the async server loop with saved reply caps, shared-memory rings, the VDSO, the badge layout, the FD ownership protocol (Section 6.4), and the warm object pools. Everything else (SIMD `memcpy`, superpages, read-ahead, cache-line tuning, hash table variants) starts as simple C and is upgraded only when a benchmark shows it is needed.
+2. **Design for Speed, Implement Simply:** Speed decisions that are expensive to retrofit are part of the architecture from Day 1: the async server loop with saved reply caps, shared-memory rings, the VDSO, the badge layout, and the FD ownership protocol (Section 6.4). Everything else (warm object pools, which sit behind the object allocator API so callers never change; SIMD `memcpy`, superpages, read-ahead, cache-line tuning, hash table variants) starts as simple C and is upgraded only when a benchmark shows it is needed.
 3. **Small Pieces, One Job Each:** Functions do one thing and are short (target <= 50 lines; a longer function needs a reason). Files cover one topic (target <= 800 lines). Each server is split into clear modules (e.g. `procd/{proc,vm,sig,ipc}`).
 4. **Plain C, No Cleverness:** No macro tricks, no hidden control flow, no deep pointer-to-function webs, no code generation unless unavoidable. Prefer fixed-size arrays and simple loops over complex data structures when the size is small and bounded. Use `static inline` functions instead of function-like macros.
 5. **Fast Paths Stay Small and Have a Simple Twin:** Every fast path (VDSO read, ring read/write, futex fast path, IPC fast path) is a small, clearly named function next to a simple slow path that is always correct. Tests check that both paths give identical results.
@@ -836,16 +836,18 @@ No phase may be declared complete until **ALL** its exit criteria pass and are v
 ### Phase 1: `libos`, Untyped/Cap Allocator, IPC Protocol & Multi-Task Bootstrap
 - **Objectives:** Build the core freestanding OS library and prove isolated multi-process capability/IPC communication with zero leaks.
 - **Deliverables:**
-  - `libs/libos`: slab allocator, buddy untyped allocator, physical frame metadata array, warm object pools, CSpace allocator, data structures (list, hash, interval tree, radix tree), rank-checked locks, SPSC ring buffer, SIMD `memcpy`/`memset`.
-  - `arch/aarch64/`: page table mapping helpers, counter/barrier helpers, register context helpers.
-  - `procd` bootstrap spawning a separate unprivileged test child process with fixed CSpace slots, badged IPC endpoint, and fault endpoint.
+  - `libs/libos`: buddy untyped allocator (kernel objects are carved from untyped blocks and freed by revoking the block, so the kernel re-zeroes memory and every derived cap is removed), CSpace slot allocator, intrusive list, simple `memcpy`/`memset`/`memmove`/`memcmp`, debug print.
+  - `arch/aarch64/`: page/page-table mapping wrappers, counter helpers (`KernelArmExportVCNTUser=ON`), register context helpers.
+  - `procd`: kernel object allocator on top of the buddy allocator, minimal static ELF loader (embedded test child), and a bootstrap that spawns a separate unprivileged test child process with fixed CSpace slots, badged IPC endpoint, and badged fault endpoint.
+  - *Moved to the phase that first uses them (Section 2.1 rule 6, no code without a real user):* slab allocator + interval tree + frame metadata array → Phase 2; SPSC ring → Phase 3; hash table + radix tree → Phase 4; rank-checked locks → first multi-threaded server (Phase 9); warm object pools + SIMD `memcpy`/`memset` → when a benchmark shows the need.
 - **Exit Criteria:**
-  - Host unit tests for slab, buddy, interval tree, radix tree, and SPSC ring pass under ASan+UBSan across 100+ randomized seeds.
+  - Host unit tests for the buddy untyped allocator and the slot allocator pass under ASan+UBSan across 100+ randomized seeds, checking exact model equivalence and full coalescing (0 leaked blocks).
   - QEMU test: child calls `procd` IPC 100,000 times, triggers controlled fault caught by `procd`, child is destroyed, and **0 bytes / 0 capabilities leaked** across 100 create/destroy cycles.
 
 ### Phase 2: Virtual Memory (VMA, Demand Paging, COW), ELF64 Loader & VDSO
 - **Objectives:** Full Unix virtual memory semantics, static ELF64 loading, and zero-IPC VDSO.
 - **Deliverables:**
+  - `libs/libos` slab allocator, interval tree, and physical frame metadata array (moved from Phase 1), each with host tests under ASan+UBSan across 100+ randomized seeds.
   - `procd` VMA interval tree (`mmap`, `munmap` with splitting, `mprotect` with splitting/merging, `brk`).
   - Demand-zero paging, stack auto-growth + guard-page `SIGSEGV`, Copy-on-Write (COW) refcounted frames (including single-ref fast upgrade).
   - Static & PIE ELF64 loader with System V initial stack (`argc`, `argv`, `envp`, `auxv`).
@@ -859,13 +861,14 @@ No phase may be declared complete until **ALL** its exit criteria pass and are v
   - `fork`, `vfork`, `posix_spawn_fast`, `execve` (ELF64 + `#!`), `exit`, `exit_group`, `waitpid`/`waitid` (incl. `WNOHANG`, `WUNTRACED`, `WCONTINUED`), process groups & sessions, credentials.
   - Full signal delivery with `sigaction`, `sigprocmask`, `sigaltstack`, VDSO `sigreturn` trampoline, `EINTR` vs `SA_RESTART`, realtime queued signals, `kill`/`tgkill`/`killpg`.
   - Thread creation (`TLS` via `tpidr_el0`), futex (`WAIT`/`WAKE`/`REQUEUE`/robust lists), high-res timers (`nanosleep`, `alarm`, `setitimer`, `timer_create`, `timerfd`), `eventfd`.
-  - Zero-syscall streaming SPSC shared-memory `pipe`/`pipe2` with `PIPE_BUF` atomicity and `SIGPIPE`/`EPIPE`.
+  - Zero-syscall streaming SPSC shared-memory `pipe`/`pipe2` with `PIPE_BUF` atomicity and `SIGPIPE`/`EPIPE` (`libs/libos` SPSC ring moved from Phase 1, with host tests under ASan+UBSan across 100+ randomized seeds).
 - **Exit Criteria:**
   - QEMU behavioral tests: 1,000× `fork+exit+waitpid` with 0 byte/cap leaks; nested signal handlers + `sigaltstack` + FPU register preservation across signals; multithreaded futex contention test (8 threads, 100,000 ops); pipe throughput & atomic 4 KB writer stress test; `SIGCHLD` + zombie reaping + orphan reparenting to PID 1.
 
 ### Phase 4: `devd`, Isolated Drivers, `vfsd`, Unified Page Cache & Persistent Storage
 - **Objectives:** Real hardware/VirtIO drivers, full VFS, unified page cache, and crash-clean persistent `ext2` filesystem.
 - **Deliverables:**
+  - `libs/libos` hash table and radix tree (moved from Phase 1), with host tests under ASan+UBSan across 100+ randomized seeds.
   - `libs/libdriver` (MMIO, DMA pool, IRQ handler wrapper, DTB parser).
   - `devd` + isolated drivers: `uart_pl011`, `timer` + `rtc_pl031`, `virtio_rng`, `virtio_blk` (GPT/MBR partitions).
   - `vfsd`: mount table, dentry/inode cache, full POSIX path walk (`*at`, symlinks, `ELOOP`, `..` across mounts), FD table + `dup`/`fcntl` locks/`flock`, unified page cache integrated with `procd` `mmap`.
@@ -925,7 +928,7 @@ No phase may be declared complete until **ALL** its exit criteria pass and are v
 ### Phase 9: SMP Multi-Core, `x86_64` Port, Real-World Ports & Self-Hosting
 - **Objectives:** True multi-core scaling, multi-architecture portability, and native self-hosting.
 - **Deliverables:**
-  - Enable `KernelMaxNumNodes=4+` in seL4; per-CPU scheduler load balancing in `procd`, fine-grained locking / sharded server endpoints across cores.
+  - Enable `KernelMaxNumNodes=4+` in seL4; per-CPU scheduler load balancing in `procd`, fine-grained locking / sharded server endpoints across cores, rank-checked locks in `libs/libos` (moved from Phase 1).
   - Complete `arch/x86_64/` (`q35`, APIC/HPET/COM1/VirtIO-PCI, `FS_BASE` TLS, x86_64 signal trampoline with 128-byte red zone) + `musl` x86_64 port.
   - Real-world third-party C ports: **Dropbear SSH** (remote SSH login into Fastix over TCP + PTY!), **bmake/gmake**, and **TinyCC (`tcc`)**. (Native Clang/GCC is a post-v1.0 stretch goal; see Section 8.6.)
 - **Exit Criteria:**
