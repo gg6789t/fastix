@@ -415,19 +415,20 @@ int sig_take_waited(struct thread *t, uint64_t set, uint64_t info_u)
     return sig;
 }
 
-/* Hands `sig` to a thread parked in rt_sigtimedwait for it (`only`: just that thread). */
-static bool wake_sigwaiter(struct proc *p, const struct thread *only, int sig)
+/* Hands a just-queued `sig` to a thread parked in rt_sigtimedwait for it. A thread-directed
+ * signal sits in its target's own queue, so only that thread can take it. */
+static bool wake_sigwaiter(struct proc *p, int sig)
 {
     struct list_node *n;
     LIST_FOREACH(n, &p->threads) {
         struct thread *t = LIST_ENTRY(n, struct thread, link);
-        if ((only != NULL && t != only) || t->exited || t->park_kind != PARK_SIGWAIT ||
+        if (t->exited || t->park_kind != PARK_SIGWAIT ||
             (t->sigwait_set & fastix_sig_bit(sig)) == 0) {
             continue;
         }
         int r = sig_take_waited(t, fastix_sig_bit(sig), t->sigwait_info_ptr);
         if (r == 0) {
-            return false;
+            continue; /* queued for another thread */
         }
         timer_cancel_sleep(t); /* no-op unless the wait had a timeout */
         struct reply_obj *rep = t->park_reply;
@@ -612,7 +613,7 @@ int sig_send_proc(struct proc *p, int sig, const struct fastix_siginfo *info)
     if (err != 0) {
         return err;
     }
-    if (wake_sigwaiter(p, NULL, sig)) {
+    if (wake_sigwaiter(p, sig)) {
         return 0;
     }
     struct thread *target = pick_target_thread(p, sig);
@@ -643,7 +644,7 @@ int sig_send_thread(struct thread *t, int sig, const struct fastix_siginfo *info
     if (err != 0) {
         return err;
     }
-    if (wake_sigwaiter(t->proc, t, sig)) {
+    if (wake_sigwaiter(t->proc, sig)) {
         return 0;
     }
     kick_thread(t);

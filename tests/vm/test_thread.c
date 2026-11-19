@@ -2,7 +2,8 @@
  * test_thread.c - Phase 3C behavioral tests: thread_create + TLS (tpidr_el0) +
  * clear_child_tid join, 8-thread 100,000-op futex mutex contention, shared
  * cross-process futex, WAIT/WAKE_BITSET, CMP_REQUEUE, timeout, robust lists,
- * multithreaded fork (keeps only calling thread), and exit vs exit_group.
+ * multithreaded fork (keeps only calling thread), exit vs exit_group, and
+ * rt_sigtimedwait with thread-directed signals.
  */
 #include <stdatomic.h>
 #include <stdint.h>
@@ -412,10 +413,82 @@ static void t_mt_fork_and_exit_group(void)
     vmtest_report("threads_mt_fork_and_exit_group", ok);
 }
 
+/* ---- 5. rt_sigtimedwait with thread-directed signals (tgkill) ---- */
+
+static volatile int64_t sw_ret[2];
+static volatile int32_t sw_code[2];
+
+static int64_t sigtimedwait_ms(uint64_t set, struct fastix_siginfo *si, int64_t ms)
+{
+    struct fastix_timespec ts = { ms / 1000, (ms % 1000) * 1000000 };
+    return fastix_sys4(FASTIX_SYS_rt_sigtimedwait, (uint64_t)(uintptr_t)&set,
+                       (uint64_t)(uintptr_t)si, (uint64_t)(uintptr_t)&ts, sizeof(uint64_t));
+}
+
+/* Worker `idx` waits for SIGUSR1: worker 0 for 60 ms, worker 1 for 2 s. */
+static void sigwait_worker(uint64_t idx)
+{
+    struct fastix_siginfo si = { 0 };
+    sw_ret[idx] = sigtimedwait_ms(fastix_sig_bit(FASTIX_SIGUSR1), &si, idx == 0 ? 60 : 2000);
+    sw_code[idx] = si.si_code;
+    sys_thread_exit(0);
+}
+
+/* Starts both workers; after 15 ms sends SIGUSR1 to worker 1 (to_worker) or to the main
+ * thread, then joins both. Returns 1 if both threads were created. */
+static int run_sigwait_workers(int to_worker)
+{
+    uint32_t pid = fastix_procinfo()->pid;
+    uint64_t target = (uint64_t)fastix_sys0(FASTIX_SYS_gettid);
+    struct fastix_timespec d = { 0, 15000000 };
+    int ok = 1;
+    for (int i = 0; i < 2; i++) {
+        sw_ret[i] = 0;
+        sw_code[i] = 0;
+        thr_ctids[i] = 1;
+        int64_t tid = sys_thread_create(sigwait_worker, thr_stacks[i] + THREAD_STACK, (uint64_t)i,
+                                        0, &thr_ctids[i],
+                                        FASTIX_CLONE_CHILD_SETTID | FASTIX_CLONE_CHILD_CLEARTID);
+        ok &= tid > 0;
+        if (i == 1 && to_worker) {
+            target = (uint64_t)tid;
+        }
+    }
+    (void)fastix_sys2(FASTIX_SYS_nanosleep, (uint64_t)(uintptr_t)&d, 0);
+    (void)fastix_sys3(FASTIX_SYS_tgkill, pid, target, FASTIX_SIGUSR1);
+    join_ctid(&thr_ctids[0]);
+    join_ctid(&thr_ctids[1]);
+    return ok;
+}
+
+static void t_sigtimedwait_threads(void)
+{
+    struct vm_test_stats before = vmtest_get_stats();
+    uint64_t usr1 = fastix_sig_bit(FASTIX_SIGUSR1);
+    struct fastix_siginfo si;
+    int ok = 1;
+
+    ok &= fastix_sys3(FASTIX_SYS_rt_sigprocmask, FASTIX_SIG_BLOCK, (uint64_t)(uintptr_t)&usr1,
+                      0) == 0;
+    /* A. Two threads wait; the signal sent to worker 1 wakes only worker 1. */
+    ok &= run_sigwait_workers(1);
+    ok &= sw_ret[1] == FASTIX_SIGUSR1 && sw_code[1] == FASTIX_SI_TKILL;
+    ok &= sw_ret[0] == -FASTIX_EAGAIN;
+    /* B. A signal sent to the main thread wakes neither; it stays pending on main. */
+    ok &= run_sigwait_workers(0);
+    ok &= sw_ret[0] == -FASTIX_EAGAIN && sw_ret[1] == -FASTIX_EAGAIN;
+    ok &= sigtimedwait_ms(usr1, &si, 0) == FASTIX_SIGUSR1 && si.si_code == FASTIX_SI_TKILL;
+    ok &= fastix_sys3(FASTIX_SYS_rt_sigprocmask, FASTIX_SIG_UNBLOCK, (uint64_t)(uintptr_t)&usr1,
+                      0) == 0;
+    ok &= vmtest_same_stats(before, vmtest_get_stats());
+    vmtest_report("sigtimedwait_thread_directed", ok);
+}
+
 void run_thread_tests(void)
 {
     t_threads_tls_and_leak();
     t_futex_contention();
     t_futex_features();
     t_mt_fork_and_exit_group();
+    t_sigtimedwait_threads();
 }

@@ -12,6 +12,7 @@
 - [ ] 4F `ext2`: read/write `ext2` on `virtio_blk`, reboot persistence verified across two QEMU boots, unlinked-but-open files freed on last close.
 
 ## Done Log
+- 2026-11-19: `rt_sigtimedwait` thread-directed signals: a waiter lookup that stopped at the first waiting thread could leave the real target asleep when two threads wait; fixed (and simplified). New test `sigtimedwait_thread_directed` (two waiting threads, `tgkill`); the old behaviour planted back → test failed.
 - 2026-11-19: Added `waitid` (exit/stop/continue reports, `WNOWAIT`, `WNOHANG`, blocking wake-up, SIGCHLD siginfo) and `rt_sigtimedwait` (pending, poll, timeout → `EAGAIN`, wake by another process, `EINTR`) to procd; new `tests/vm/test_wait.c` (2 tests, 0 leaks). Verified: 41/41 QEMU tests; 3 planted bugs (timeout not cancelled, `WNOWAIT` ignored, wrong timeout result) each failed the suite.
 - 2026-11-19: Phase 4A–4B review fixes (Claude): procd and devd now share one kernel-object allocator (`libs/libos/alloc/kalloc.c`, ~150 duplicated lines removed); the sigreturn trampoline takes the seL4 syscall number and FPSR/FPCR offsets from headers with compile-time checks; the driver-restart test fails cleanly (no hang) when a restart fails (planted bug → test failed); driver READMEs; AGENTS.md note on the two driver→procd calls; `tools/test_host.sh` explains that it needs `tools/build.sh` first.
 - 2026-11-19: **Phase 4A & 4B done** (`b9915a4`). Added `libos` `hashtab` + `radix` and `libdriver` (`dtb`, `mmio`, `dma`, `irq`, `virtio` v1+v2), `servers/devd/`, isolated drivers (`uart_pl011`, `rtc_pl031`, `virtio_rng`, `virtio_blk`, `fault_test`), `procd/devboot.c`, `docs/adr/0002-timer.md`, and QEMU `--disk` support. Verified with `tools/build.sh` (0 Fastix warnings), `tools/test_host.sh` (10/10), `tests/run_qemu_tests.py` (39/39, exit 0), host disk persistence check, and planted-bug checks on all 8 new tests.
@@ -43,4 +44,4 @@
 | Isolated drivers (`.text` + `.rodata`) | `uart_pl011` 2.3 KB, `rtc_pl031` 0.2 KB, `virtio_rng` 3.8 KB, `virtio_blk` 3.5 KB, `fault_test` 0.2 KB | <= 32 KB each |
 | Full boot image (`fastix-image.elf`) | 491,496 B (480 KB) | <= 4 MB |
 | Pipe 4 MiB stream (QEMU TCG, not a benchmark) | ~162 MB/s | hardware target >= 4 GB/s |
-| All QEMU tests (41 tests), start to finish | ~7.2 s | test time, not boot time |
+| All QEMU tests (42 tests), start to finish | ~7.2 s | whole run incl. QEMU start (`time`) |
