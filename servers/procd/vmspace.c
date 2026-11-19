@@ -6,6 +6,7 @@
 #include <fastix/signal_abi.h>
 #include <fastix/vspace.h>
 #include <libos/assert.h>
+#include <libos/mem.h>
 #include <libos/slab.h>
 
 #include "cspace.h"
@@ -19,18 +20,115 @@ struct pt_rec {
     struct kobj obj;
 };
 
-static struct slab_cache vma_cache, page_cache, pt_cache;
+struct shm_slot {
+    struct rnode node; /* [off, off + PAGE_SIZE) */
+    struct frame *frame;
+};
+
+struct anon_shm {
+    uint32_t refs;
+    struct rtree frames; /* offset -> struct shm_slot */
+};
+
+static struct slab_cache vs_cache, vma_cache, page_cache, pt_cache, shm_cache, shm_slot_cache;
 
 void vms_module_init(void)
 {
+    slab_init(&vs_cache, "vmspace", sizeof(struct vmspace), heap_provider());
     slab_init(&vma_cache, "vma", sizeof(struct vma), heap_provider());
     slab_init(&page_cache, "page", sizeof(struct page), heap_provider());
     slab_init(&pt_cache, "pt", sizeof(struct pt_rec), heap_provider());
+    slab_init(&shm_cache, "anon_shm", sizeof(struct anon_shm), heap_provider());
+    slab_init(&shm_slot_cache, "shm_slot", sizeof(struct shm_slot), heap_provider());
 }
 
 struct vm_stats vms_stats(void)
 {
     return (struct vm_stats){ vma_cache.in_use, page_cache.in_use, pt_cache.in_use };
+}
+
+/* ---- anonymous shared-memory backing object ---- */
+
+static int shm_create(struct anon_shm **out)
+{
+    struct anon_shm *s = slab_alloc(&shm_cache);
+    if (s == NULL) {
+        return -FASTIX_ENOMEM;
+    }
+    s->refs = 1;
+    rtree_init(&s->frames);
+    *out = s;
+    return 0;
+}
+
+static void shm_get(struct anon_shm *s)
+{
+    if (s != NULL) {
+        s->refs++;
+    }
+}
+
+static void shm_put(struct anon_shm *s)
+{
+    if (s == NULL) {
+        return;
+    }
+    libos_assert(s->refs > 0);
+    if (--s->refs != 0) {
+        return;
+    }
+    struct rnode *n = rtree_next(&s->frames, 0);
+    while (n != NULL) {
+        struct rnode *next = rtree_next(&s->frames, n->end);
+        struct shm_slot *sl = LIST_ENTRY(n, struct shm_slot, node);
+        rtree_remove(&s->frames, n);
+        frame_put(sl->frame);
+        slab_free(&shm_slot_cache, sl);
+        n = next;
+    }
+    slab_free(&shm_cache, s);
+}
+
+/* Returns existing or newly allocated frame at byte offset `off` inside `s` (borrowed ref). */
+static int shm_get_or_alloc(struct anon_shm *s, uint64_t off, struct frame **out)
+{
+    struct rnode *n = rtree_find(&s->frames, off);
+    if (n != NULL) {
+        *out = LIST_ENTRY(n, struct shm_slot, node)->frame;
+        return 0;
+    }
+    struct shm_slot *sl = slab_alloc(&shm_slot_cache);
+    if (sl == NULL) {
+        return -FASTIX_ENOMEM;
+    }
+    int err = frame_new(&sl->frame);
+    if (err != 0) {
+        slab_free(&shm_slot_cache, sl);
+        return err;
+    }
+    sl->node.start = off;
+    sl->node.end = off + FASTIX_PAGE_SIZE;
+    if (rtree_insert(&s->frames, &sl->node) != 0) {
+        libos_assert(0 && "shm slot already present");
+    }
+    *out = sl->frame;
+    return 0;
+}
+
+static int shm_insert_frame(struct anon_shm *s, uint64_t off, struct frame *f)
+{
+    struct shm_slot *sl = slab_alloc(&shm_slot_cache);
+    if (sl == NULL) {
+        return -FASTIX_ENOMEM;
+    }
+    frame_get(f);
+    sl->frame = f;
+    sl->node.start = off;
+    sl->node.end = off + FASTIX_PAGE_SIZE;
+    if (rtree_insert(&s->frames, &sl->node) != 0) {
+        libos_assert(0 && "shm slot already present");
+    }
+    return 0;
 }
 
 /* ---- small helpers ---- */
@@ -86,10 +184,11 @@ static int keep_pt(void *ctx, const struct kobj *pt)
 
 /* ---- pages ---- */
 
-/* Makes the hardware mapping of `pg` match `prot` and the sharing state. */
-static int page_apply(struct vmspace *vs, struct page *pg, uint32_t prot, bool *changed)
+/* Makes the hardware mapping of `pg` match `prot` and sharing state. */
+static int page_apply(struct vmspace *vs, struct page *pg, uint32_t prot, bool shared,
+                      bool *changed)
 {
-    bool writable = (prot & FASTIX_PROT_WRITE) && pg->frame->refs == 1;
+    bool writable = (prot & FASTIX_PROT_WRITE) && (shared || pg->frame->refs == 1);
     bool exec = (prot & FASTIX_PROT_EXEC) != 0;
 
     *changed = false;
@@ -130,7 +229,7 @@ static void page_remove(struct vmspace *vs, struct page *pg)
 }
 
 /* Adds a page record for frame `f` at `addr` (taking a reference) and maps it. */
-static int page_add(struct vmspace *vs, uint64_t addr, struct frame *f, uint32_t prot)
+static int page_add(struct vmspace *vs, uint64_t addr, struct frame *f, uint32_t prot, bool shared)
 {
     struct page *pg = slab_alloc(&page_cache);
     bool changed;
@@ -144,8 +243,7 @@ static int page_add(struct vmspace *vs, uint64_t addr, struct frame *f, uint32_t
         return err;
     }
     err = kobj_sel4_err(seL4_CNode_Copy(cspace_root(), pg->cap, seL4_WordBits,
-                                        cspace_root(), f->cap, seL4_WordBits,
-                                        seL4_AllRights));
+                                        cspace_root(), f->cap, seL4_WordBits, seL4_AllRights));
     if (err != 0) {
         kobj_slot_put(pg->cap);
         slab_free(&page_cache, pg);
@@ -158,22 +256,32 @@ static int page_add(struct vmspace *vs, uint64_t addr, struct frame *f, uint32_t
     if (rtree_insert(&vs->pages, &pg->node) != 0) {
         libos_assert(0 && "page already present");
     }
-    err = page_apply(vs, pg, prot, &changed);
+    err = page_apply(vs, pg, prot, shared, &changed);
     if (err != 0) {
         page_remove(vs, pg);
     }
     return err;
 }
 
-static int add_fresh_page(struct vmspace *vs, uint64_t addr, uint32_t prot)
+/* Demand-allocates a page at `page_addr` inside VMA `v`. */
+static int add_vma_page(struct vmspace *vs, const struct vma *v, uint64_t page_addr)
 {
+    bool shared = (v->flags & VMA_SHARED) != 0;
+    if (shared && v->shm != NULL) {
+        struct frame *f;
+        uint64_t off = v->shm_off + (page_addr - v->node.start);
+        int err = shm_get_or_alloc(v->shm, off, &f);
+        if (err != 0) {
+            return err;
+        }
+        return page_add(vs, page_addr, f, v->prot, true);
+    }
     struct frame *f;
     int err = frame_new(&f);
-
     if (err != 0) {
         return err;
     }
-    err = page_add(vs, addr, f, prot);
+    err = page_add(vs, page_addr, f, v->prot, false);
     frame_put(f); /* the page record holds its own reference */
     return err;
 }
@@ -191,7 +299,7 @@ static int cow_copy(struct vmspace *vs, struct page *pg, uint32_t prot)
     err = frame_copy(f, pg->frame);
     if (err == 0) {
         page_remove(vs, pg);
-        err = page_add(vs, addr, f, prot);
+        err = page_add(vs, addr, f, prot, false);
     }
     frame_put(f);
     return err;
@@ -211,7 +319,7 @@ static void pages_remove_range(struct vmspace *vs, uint64_t start, uint64_t end)
 /* ---- VMAs ---- */
 
 static int vma_new(struct vmspace *vs, uint64_t start, uint64_t end, uint32_t prot,
-                   uint32_t flags)
+                   uint32_t flags, struct anon_shm *shm, uint64_t shm_off)
 {
     struct vma *v = slab_alloc(&vma_cache);
 
@@ -222,8 +330,12 @@ static int vma_new(struct vmspace *vs, uint64_t start, uint64_t end, uint32_t pr
     v->node.end = end;
     v->prot = prot;
     v->flags = flags;
+    v->shm = shm;
+    v->shm_off = shm_off;
+    shm_get(shm);
     int err = rtree_insert(&vs->vmas, &v->node);
     if (err != 0) {
+        shm_put(shm);
         slab_free(&vma_cache, v);
     }
     return err;
@@ -241,8 +353,14 @@ static int split_at(struct vmspace *vs, uint64_t at)
     if (upper == NULL) {
         return -FASTIX_ENOMEM;
     }
-    *upper = (struct vma){ .node = { .start = at, .end = v->node.end }, .prot = v->prot,
-                           .flags = v->flags };
+    *upper = (struct vma){
+        .node = { .start = at, .end = v->node.end },
+        .prot = v->prot,
+        .flags = v->flags,
+        .shm = v->shm,
+        .shm_off = v->shm != NULL ? v->shm_off + (at - v->node.start) : 0,
+    };
+    shm_get(upper->shm);
     v->node.end = at; /* shrinking in place keeps the tree ordered */
     if (rtree_insert(&vs->vmas, &upper->node) != 0) {
         libos_assert(0 && "split produced an overlap");
@@ -256,8 +374,10 @@ static void vmas_remove_range(struct vmspace *vs, uint64_t start, uint64_t end)
 
     while (n != NULL && n->start < end) {
         struct rnode *next = rtree_next(&vs->vmas, n->end);
+        struct vma *v = LIST_ENTRY(n, struct vma, node);
         rtree_remove(&vs->vmas, n);
-        slab_free(&vma_cache, LIST_ENTRY(n, struct vma, node));
+        shm_put(v->shm);
+        slab_free(&vma_cache, v);
         n = next;
     }
 }
@@ -285,27 +405,46 @@ static bool range_is_free(const struct vmspace *vs, uint64_t start, uint64_t end
 
 /* ---- public operations ---- */
 
-int vms_init(struct vmspace *vs)
+int vms_create(struct vmspace **out)
 {
+    struct vmspace *vs = slab_alloc(&vs_cache);
+    if (vs == NULL) {
+        return -FASTIX_ENOMEM;
+    }
+    vs->refs = 1;
     rtree_init(&vs->vmas);
     rtree_init(&vs->pages);
     list_init(&vs->pts);
-    vs->brk_start = 0;
-    vs->brk_end = 0;
     int err = kobj_alloc(ARCH_VSPACE_OBJECT, 0, &vs->root);
     if (err != 0) {
-        vs->root.block = NULL;
+        slab_free(&vs_cache, vs);
         return err;
     }
     err = kobj_sel4_err(arch_assign_asid(vs->root.cap));
     if (err != 0) {
         kobj_free(&vs->root);
+        slab_free(&vs_cache, vs);
+        return err;
     }
-    return err;
+    *out = vs;
+    return 0;
 }
 
-void vms_destroy(struct vmspace *vs)
+void vms_get(struct vmspace *vs)
 {
+    libos_assert(vs != NULL && vs->refs > 0);
+    vs->refs++;
+}
+
+void vms_put(struct vmspace *vs)
+{
+    if (vs == NULL) {
+        return;
+    }
+    libos_assert(vs->refs > 0);
+    if (--vs->refs != 0) {
+        return;
+    }
     pages_remove_range(vs, 0, UINT64_MAX);
     vmas_remove_range(vs, 0, UINT64_MAX);
     struct list_node *n;
@@ -317,12 +456,14 @@ void vms_destroy(struct vmspace *vs)
     if (vs->root.block != NULL) {
         kobj_free(&vs->root);
     }
+    slab_free(&vs_cache, vs);
 }
 
 int vms_mmap(struct vmspace *vs, uint64_t addr, uint64_t len, uint32_t prot, uint32_t flags,
              uint64_t *out)
 {
     uint64_t size = page_round(len);
+    uint32_t map_type = flags & FASTIX_MAP_TYPE;
 
     if (size == 0 || (prot & ~(uint32_t)FASTIX_PROT_MASK) != 0) {
         return -FASTIX_EINVAL;
@@ -330,8 +471,8 @@ int vms_mmap(struct vmspace *vs, uint64_t addr, uint64_t len, uint32_t prot, uin
     if ((prot & FASTIX_PROT_WRITE) && (prot & FASTIX_PROT_EXEC)) {
         return -FASTIX_EACCES; /* W^X */
     }
-    if ((flags & FASTIX_MAP_TYPE) != FASTIX_MAP_PRIVATE) {
-        return -FASTIX_EINVAL; /* MAP_SHARED arrives with shared memory objects */
+    if (map_type != FASTIX_MAP_PRIVATE && map_type != FASTIX_MAP_SHARED) {
+        return -FASTIX_EINVAL;
     }
     if (!(flags & FASTIX_MAP_ANONYMOUS)) {
         return -FASTIX_EBADF; /* file mappings arrive with vfsd */
@@ -364,7 +505,18 @@ int vms_mmap(struct vmspace *vs, uint64_t addr, uint64_t len, uint32_t prot, uin
             return -FASTIX_ENOMEM;
         }
     }
-    int err = vma_new(vs, addr, addr + size, prot, 0);
+
+    struct anon_shm *shm = NULL;
+    uint32_t vma_flags = 0;
+    if (map_type == FASTIX_MAP_SHARED) {
+        int err = shm_create(&shm);
+        if (err != 0) {
+            return err;
+        }
+        vma_flags = VMA_SHARED;
+    }
+    int err = vma_new(vs, addr, addr + size, prot, vma_flags, shm, 0);
+    shm_put(shm); /* VMA holds its own reference now */
     if (err == 0) {
         *out = addr;
     }
@@ -426,14 +578,16 @@ int vms_mprotect(struct vmspace *vs, uint64_t addr, uint64_t len, uint32_t prot)
     }
     for (struct rnode *n = rtree_next(&vs->vmas, addr); n != NULL && n->start < end;
          n = rtree_next(&vs->vmas, n->end)) {
-        LIST_ENTRY(n, struct vma, node)->prot = prot;
-    }
-    for (struct rnode *n = rtree_next(&vs->pages, addr); n != NULL && n->start < end;
-         n = rtree_next(&vs->pages, n->end)) {
-        bool changed;
-        err = page_apply(vs, LIST_ENTRY(n, struct page, node), prot, &changed);
-        if (err != 0) {
-            return err;
+        struct vma *v = LIST_ENTRY(n, struct vma, node);
+        v->prot = prot;
+        bool shared = (v->flags & VMA_SHARED) != 0;
+        for (struct rnode *p = rtree_next(&vs->pages, n->start); p != NULL && p->start < n->end;
+             p = rtree_next(&vs->pages, p->end)) {
+            bool changed;
+            err = page_apply(vs, LIST_ENTRY(p, struct page, node), prot, shared, &changed);
+            if (err != 0) {
+                return err;
+            }
         }
     }
     return 0;
@@ -448,7 +602,8 @@ void vms_brk(struct vmspace *vs, uint64_t addr, uint64_t *out)
     uint64_t old_top = page_round(vs->brk_end), new_top = page_round(addr);
     if (new_top > old_top) {
         if (!range_is_free(vs, old_top, new_top) ||
-            vma_new(vs, old_top, new_top, FASTIX_PROT_READ | FASTIX_PROT_WRITE, VMA_HEAP) != 0) {
+            vma_new(vs, old_top, new_top, FASTIX_PROT_READ | FASTIX_PROT_WRITE, VMA_HEAP, NULL,
+                    0) != 0) {
             return;
         }
     } else if (new_top < old_top && vms_munmap(vs, new_top, old_top - new_top) != 0) {
@@ -483,15 +638,16 @@ int vms_fault(struct vmspace *vs, uint64_t addr, enum vm_access access, int *sig
     if (!access_allowed(v->prot, access)) {
         return 1;
     }
+    bool shared = (v->flags & VMA_SHARED) != 0;
     struct page *pg = page_at(vs, addr & ~PAGE_MASK);
     bool changed = true;
     int err;
     if (pg == NULL) {
-        err = add_fresh_page(vs, addr & ~PAGE_MASK, v->prot); /* demand-zero */
-    } else if (access == VM_WRITE && pg->frame->refs > 1) {
+        err = add_vma_page(vs, v, addr & ~PAGE_MASK);
+    } else if (access == VM_WRITE && !shared && pg->frame->refs > 1) {
         err = cow_copy(vs, pg, v->prot);
     } else {
-        err = page_apply(vs, pg, v->prot, &changed); /* e.g. sole owner again after a fork */
+        err = page_apply(vs, pg, v->prot, shared, &changed);
     }
     if (err != 0) {
         *sig = FASTIX_SIGBUS;
@@ -509,7 +665,8 @@ int vms_clone(struct vmspace *dst, struct vmspace *src)
         if (v->flags & VMA_SPECIAL) {
             continue;
         }
-        int err = vma_new(dst, n->start, n->end, v->prot, v->flags);
+        bool shared = (v->flags & VMA_SHARED) != 0;
+        int err = vma_new(dst, n->start, n->end, v->prot, v->flags, v->shm, v->shm_off);
         if (err != 0) {
             return err;
         }
@@ -517,9 +674,9 @@ int vms_clone(struct vmspace *dst, struct vmspace *src)
              p = rtree_next(&src->pages, p->end)) {
             struct page *pg = LIST_ENTRY(p, struct page, node);
             bool changed;
-            err = page_add(dst, p->start, pg->frame, v->prot);
-            if (err == 0) {
-                err = page_apply(src, pg, v->prot, &changed); /* now shared: parent goes read-only */
+            err = page_add(dst, p->start, pg->frame, v->prot, shared);
+            if (err == 0 && !shared) {
+                err = page_apply(src, pg, v->prot, false, &changed); /* COW: parent goes read-only */
             }
             if (err != 0) {
                 return err;
@@ -531,7 +688,8 @@ int vms_clone(struct vmspace *dst, struct vmspace *src)
     return 0;
 }
 
-int vms_write(struct vmspace *vs, uint64_t addr, const void *src, size_t len)
+static int write_internal(struct vmspace *vs, uint64_t addr, const void *src, size_t len,
+                          bool check_prot)
 {
     const uint8_t *from = src;
 
@@ -540,13 +698,17 @@ int vms_write(struct vmspace *vs, uint64_t addr, const void *src, size_t len)
         if (v == NULL) {
             return -FASTIX_EFAULT;
         }
+        if (check_prot && !(v->prot & FASTIX_PROT_WRITE)) {
+            return -FASTIX_EFAULT;
+        }
+        bool shared = (v->flags & VMA_SHARED) != 0;
         uint64_t page = addr & ~PAGE_MASK, off = addr & PAGE_MASK;
         size_t chunk = FASTIX_PAGE_SIZE - off < len ? (size_t)(FASTIX_PAGE_SIZE - off) : len;
         struct page *pg = page_at(vs, page);
         int err = 0;
         if (pg == NULL) {
-            err = add_fresh_page(vs, page, v->prot);
-        } else if (pg->frame->refs > 1) {
+            err = add_vma_page(vs, v, page);
+        } else if (!shared && pg->frame->refs > 1) {
             err = cow_copy(vs, pg, v->prot);
         }
         if (err == 0) {
@@ -563,15 +725,168 @@ int vms_write(struct vmspace *vs, uint64_t addr, const void *src, size_t len)
     return 0;
 }
 
-int vms_add_special(struct vmspace *vs, uint64_t addr, struct frame *f, uint32_t prot)
+int vms_write(struct vmspace *vs, uint64_t addr, const void *src, size_t len)
 {
-    int err = vma_new(vs, addr, addr + FASTIX_PAGE_SIZE, prot, VMA_SPECIAL);
+    return write_internal(vs, addr, src, len, false);
+}
+
+int vms_write_user(struct vmspace *vs, uint64_t addr, const void *src, size_t len)
+{
+    return write_internal(vs, addr, src, len, true);
+}
+
+int vms_read(struct vmspace *vs, uint64_t addr, void *dst, size_t len)
+{
+    uint8_t *to = dst;
+
+    while (len > 0) {
+        const struct vma *v = vma_at(vs, addr);
+        if (v == NULL || v->prot == FASTIX_PROT_NONE) {
+            return -FASTIX_EFAULT;
+        }
+        uint64_t page = addr & ~PAGE_MASK, off = addr & PAGE_MASK;
+        size_t chunk = FASTIX_PAGE_SIZE - off < len ? (size_t)(FASTIX_PAGE_SIZE - off) : len;
+        struct page *pg = page_at(vs, page);
+        if (pg == NULL) {
+            /* Unfaulted private anonymous page reads as zero without allocating a frame. */
+            if ((v->flags & VMA_SHARED) && v->shm != NULL) {
+                struct rnode *sn = rtree_find(&v->shm->frames, v->shm_off + (page - v->node.start));
+                if (sn != NULL) {
+                    int err = frame_read(LIST_ENTRY(sn, struct shm_slot, node)->frame, off, to,
+                                         chunk);
+                    if (err != 0) {
+                        return err;
+                    }
+                } else {
+                    memset(to, 0, chunk);
+                }
+            } else {
+                memset(to, 0, chunk);
+            }
+        } else {
+            int err = frame_read(pg->frame, off, to, chunk);
+            if (err != 0) {
+                return err;
+            }
+        }
+        addr += chunk;
+        to += chunk;
+        len -= chunk;
+    }
+    return 0;
+}
+
+int vms_read_str(struct vmspace *vs, uint64_t addr, char *dst, size_t max_len)
+{
+    if (max_len == 0) {
+        return -FASTIX_EINVAL;
+    }
+    size_t pos = 0;
+    while (pos < max_len) {
+        uint64_t off = addr & PAGE_MASK;
+        size_t chunk = FASTIX_PAGE_SIZE - off;
+        if (chunk > max_len - pos) {
+            chunk = max_len - pos;
+        }
+        int err = vms_read(vs, addr, dst + pos, chunk);
+        if (err != 0) {
+            return err;
+        }
+        for (size_t i = 0; i < chunk; i++) {
+            if (dst[pos + i] == '\0') {
+                return 0;
+            }
+        }
+        pos += chunk;
+        addr += chunk;
+    }
+    return -FASTIX_ENAMETOOLONG;
+}
+
+int vms_get_frame(struct vmspace *vs, uint64_t addr, bool for_write, struct frame **out,
+                  bool *is_shared)
+{
+    const struct vma *v = vma_at(vs, addr);
+    if (v == NULL || v->prot == FASTIX_PROT_NONE) {
+        return -FASTIX_EFAULT;
+    }
+    if (for_write && !(v->prot & FASTIX_PROT_WRITE)) {
+        return -FASTIX_EFAULT;
+    }
+    bool shared = (v->flags & VMA_SHARED) != 0;
+    uint64_t page = addr & ~PAGE_MASK;
+    struct page *pg = page_at(vs, page);
+    int err = 0;
+    if (pg == NULL) {
+        err = add_vma_page(vs, v, page);
+    } else if (for_write && !shared && pg->frame->refs > 1) {
+        err = cow_copy(vs, pg, v->prot);
+    }
     if (err != 0) {
         return err;
     }
-    err = page_add(vs, addr, f, prot);
+    pg = page_at(vs, page);
+    *out = pg->frame;
+    if (is_shared != NULL) {
+        *is_shared = shared;
+    }
+    return 0;
+}
+
+int vms_add_special(struct vmspace *vs, uint64_t addr, struct frame *f, uint32_t prot)
+{
+    int err = vma_new(vs, addr, addr + FASTIX_PAGE_SIZE, prot, VMA_SPECIAL, NULL, 0);
+    if (err != 0) {
+        return err;
+    }
+    err = page_add(vs, addr, f, prot, true);
     if (err != 0) {
         vmas_remove_range(vs, addr, addr + FASTIX_PAGE_SIZE);
     }
     return err;
+}
+
+void vms_remove_special(struct vmspace *vs, uint64_t addr)
+{
+    vmas_remove_range(vs, addr, addr + FASTIX_PAGE_SIZE);
+    pages_remove_range(vs, addr, addr + FASTIX_PAGE_SIZE);
+}
+
+int vms_map_shared_frames(struct vmspace *vs, struct frame *const *frames, size_t nframes,
+                          uint32_t prot, uint64_t *out)
+{
+    uint64_t size = (uint64_t)nframes * FASTIX_PAGE_SIZE;
+    if (nframes == 0 || size == 0) {
+        return -FASTIX_EINVAL;
+    }
+    uint64_t addr = find_free(vs, size);
+    if (addr == 0) {
+        return -FASTIX_ENOMEM;
+    }
+    struct anon_shm *shm;
+    int err = shm_create(&shm);
+    if (err != 0) {
+        return err;
+    }
+    for (size_t i = 0; i < nframes; i++) {
+        err = shm_insert_frame(shm, (uint64_t)i * FASTIX_PAGE_SIZE, frames[i]);
+        if (err != 0) {
+            shm_put(shm);
+            return err;
+        }
+    }
+    err = vma_new(vs, addr, addr + size, prot, VMA_SHARED, shm, 0);
+    shm_put(shm);
+    if (err != 0) {
+        return err;
+    }
+    for (size_t i = 0; i < nframes; i++) {
+        err = page_add(vs, addr + (uint64_t)i * FASTIX_PAGE_SIZE, frames[i], prot, true);
+        if (err != 0) {
+            (void)vms_munmap(vs, addr, size);
+            return err;
+        }
+    }
+    *out = addr;
+    return 0;
 }

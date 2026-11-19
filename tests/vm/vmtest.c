@@ -16,6 +16,8 @@
 #include <fastix_sys/sys.h>
 #include <libos/kprint.h>
 
+#include "vmtest.h"
+
 #define PAGE           FASTIX_PAGE_SIZE
 #define RW             (FASTIX_PROT_READ | FASTIX_PROT_WRITE)
 #define ANON           (FASTIX_MAP_PRIVATE | FASTIX_MAP_ANONYMOUS)
@@ -52,27 +54,35 @@ static _Noreturn void sys_exit(int code)
     }
 }
 
-/* wait4 for `pid`; returns the pid (or -errno) and the status word in *status. */
-static int64_t sys_wait(int64_t pid, int *status)
+_Noreturn void vmtest_exit(int code)
 {
-    uint64_t args[3] = { (uint64_t)pid, 0, 0 }, more[FASTIX_CALL_MORE];
+    sys_exit(code);
+}
+
+/* wait4 for `pid`; returns the pid (or -errno) and the status word in *status. */
+int64_t vmtest_wait4(int64_t pid, int *status, uint64_t options)
+{
+    uint64_t args[3] = { (uint64_t)pid, 0, options }, more[FASTIX_CALL_MORE];
     int64_t r = fastix_call(FASTIX_SYS_wait4, 3, args, more);
-    *status = (int)more[0];
+    if (status != 0) {
+        *status = (int)more[0];
+    }
     return r;
 }
 
-struct stats {
-    uint64_t v[6]; /* free bytes, slots, frames, pages, vmas|pts, procs */
-};
-
-static struct stats get_stats(void)
+static int64_t sys_wait(int64_t pid, int *status)
 {
-    struct stats s;
+    return vmtest_wait4(pid, status, 0);
+}
+
+struct vm_test_stats vmtest_get_stats(void)
+{
+    struct vm_test_stats s;
     (void)fastix_call(FASTIX_TEST_STATS, 0, 0, s.v);
     return s;
 }
 
-static int same_stats(struct stats a, struct stats b)
+int vmtest_same_stats(struct vm_test_stats a, struct vm_test_stats b)
 {
     for (int i = 0; i < 6; i++) {
         if (a.v[i] != b.v[i]) {
@@ -89,13 +99,18 @@ static int same_stats(struct stats a, struct stats b)
     return 1;
 }
 
-static void report(const char *name, int ok)
+void vmtest_report(const char *name, int ok)
 {
     kprint_str(ok ? "[FASTIX-TEST PASS] " : "[FASTIX-TEST FAIL] ");
     kprint_str(name);
     kprint_str("\n");
     failures += !ok;
 }
+
+#define stats      vm_test_stats
+#define get_stats  vmtest_get_stats
+#define same_stats vmtest_same_stats
+#define report     vmtest_report
 
 /* ---- running something in a child ---- */
 
@@ -364,7 +379,7 @@ static void t_errors(void)
     ok &= sys_mprotect((uint64_t)a, PAGE, RW | FASTIX_PROT_EXEC) == -FASTIX_EACCES;    /* W^X */
     ok &= sys_mmap((uint64_t)a + 1, PAGE, RW, ANON | FASTIX_MAP_FIXED) == -FASTIX_EINVAL;
     ok &= sys_mmap((uint64_t)a, PAGE, RW, ANON | FASTIX_MAP_FIXED_NOREPLACE) == -FASTIX_EEXIST;
-    ok &= sys_mmap(0, PAGE, RW, FASTIX_MAP_SHARED | FASTIX_MAP_ANONYMOUS) == -FASTIX_EINVAL;
+    ok &= sys_mmap(0, PAGE, RW, FASTIX_MAP_ANONYMOUS) == -FASTIX_EINVAL; /* missing PRIVATE/SHARED */
     ok &= sys_munmap((uint64_t)a + 1, PAGE) == -FASTIX_EINVAL;
     ok &= sys_munmap(FASTIX_VDSO_ADDR, PAGE) == -FASTIX_EINVAL;  /* procd's pages are fixed */
     ok &= sys_munmap((uint64_t)a, PAGE) == 0;
@@ -399,6 +414,10 @@ _Noreturn void prog_main(uint64_t *sp)
     t_errors();
     t_spawn("load_static_elf_sysv_stack", IMAGE_STATIC);
     t_spawn("load_static_pie_sysv_stack", IMAGE_PIE);
+    run_proc_tests();
+    run_sig_tests();
+    run_thread_tests();
+    run_pipe_tests();
     kprint_str("vmtest: failures=");
     kprint_u64((uint64_t)failures);
     kprint_str("\n");

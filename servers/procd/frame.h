@@ -41,6 +41,9 @@ void frame_put(struct frame *f); /* frees the frame when refs reaches 0 */
 LIBOS_MUST_CHECK int frame_write(struct frame *f, uint64_t offset, const void *src, size_t len,
                                  bool exec);
 
+/* Reads `len` bytes at `offset` into `dst`. */
+LIBOS_MUST_CHECK int frame_read(struct frame *f, uint64_t offset, void *dst, size_t len);
+
 /* Copies the whole page `src` into `dst`. */
 LIBOS_MUST_CHECK int frame_copy(struct frame *dst, struct frame *src);
 

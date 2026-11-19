@@ -36,6 +36,19 @@ static inline void list_push(struct list_node *head, struct list_node *node)
     head->next = node;
 }
 
+static inline void list_push_back(struct list_node *head, struct list_node *node)
+{
+    node->next = head;
+    node->prev = head->prev;
+    head->prev->next = node;
+    head->prev = node;
+}
+
+#define LIST_FOREACH(pos, head) for ((pos) = (head)->next; (pos) != (head); (pos) = (pos)->next)
+#define LIST_FOREACH_SAFE(pos, tmp, head) \
+    for ((pos) = (head)->next, (tmp) = (pos)->next; (pos) != (head); \
+         (pos) = (tmp), (tmp) = (pos)->next)
+
 static inline void list_remove(struct list_node *node)
 {
     node->prev->next = node->next;

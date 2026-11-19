@@ -10,39 +10,76 @@
 #include <stdint.h>
 
 #include <arch/counter.h>
+#include <arch/regs.h>
 #include <fastix/abi.h>
 #include <fastix/cspace.h>
 #include <fastix/vdso.h>
 #include <fastix/vspace.h>
 #include <sel4/sel4.h>
 
-/* Must run first in every thread: tells libsel4 where this thread's IPC buffer is. */
+/* Per-thread slot index stored by procd in TPIDRRO_EL0 (0 = main thread). */
+static inline uint32_t fastix_tid_slot(void)
+{
+    return (uint32_t)arch_read_tpidrro();
+}
+
+static inline seL4_IPCBuffer *fastix_ipcbuf(void)
+{
+    uint64_t addr = FASTIX_IPCBUF_BASE + (uint64_t)fastix_tid_slot() * FASTIX_IPCBUF_STRIDE;
+    return (seL4_IPCBuffer *)(uintptr_t)addr;
+}
+
+static inline seL4_CPtr fastix_procd_ep(void)
+{
+    return (seL4_CPtr)fastix_cptr_thread_ep(fastix_tid_slot());
+}
+
+/* Kept for single-threaded callers that also call libsel4 helpers directly. */
 static inline void fastix_sys_init(void)
 {
-    seL4_SetIPCBuffer((seL4_IPCBuffer *)FASTIX_IPCBUF_BASE);
+    seL4_SetIPCBuffer(fastix_ipcbuf());
 }
 
 #define FASTIX_CALL_MORE 6 /* extra reply words fastix_call can return */
 
 /*
- * Calls procd with up to 6 arguments. Returns MR0 (>= 0 success, -errno failure).
- * If `more` is not NULL it receives reply words MR1..MR6 (0 when absent).
+ * Thread-safe call to procd with up to 6 arguments. Uses this thread's own
+ * procd endpoint and IPC buffer (from TPIDRRO_EL0), never the global libsel4
+ * IPC buffer pointer. Returns MR0 (>= 0 success, -errno failure).
  */
 static inline int64_t fastix_call(uint64_t nr, unsigned nargs, const uint64_t *args,
                                   uint64_t more[FASTIX_CALL_MORE])
 {
-    for (unsigned i = 0; i < nargs; i++) {
-        seL4_SetMR((int)i, args[i]);
+    seL4_IPCBuffer *buf = fastix_ipcbuf();
+    seL4_Word mr0 = nargs > 0 ? args[0] : 0;
+    seL4_Word mr1 = nargs > 1 ? args[1] : 0;
+    seL4_Word mr2 = nargs > 2 ? args[2] : 0;
+    seL4_Word mr3 = nargs > 3 ? args[3] : 0;
+    for (unsigned i = 4; i < nargs; i++) {
+        buf->msg[i] = args[i];
     }
-    seL4_MessageInfo_t info =
-        seL4_Call(FASTIX_CAP_PROCD_EP_MAIN, seL4_MessageInfo_new(nr, 0, 0, nargs));
-    seL4_Word n = seL4_MessageInfo_get_length(info);
+
+    seL4_Word badge = 0;
+    seL4_MessageInfo_t out_info = { { 0 } };
+    arm_sys_send_recv(seL4_SysCall, fastix_procd_ep(), &badge,
+                      seL4_MessageInfo_new(nr, 0, 0, nargs).words[0], &out_info.words[0],
+                      &mr0, &mr1, &mr2, &mr3, 0);
+
+    seL4_Word n = seL4_MessageInfo_get_length(out_info);
     if (more != NULL) {
+        seL4_Word reg[4] = { mr0, mr1, mr2, mr3 };
         for (unsigned i = 0; i < FASTIX_CALL_MORE; i++) {
-            more[i] = (i + 1 < n) ? seL4_GetMR((int)i + 1) : 0;
+            unsigned idx = i + 1;
+            if (idx >= n) {
+                more[i] = 0;
+            } else if (idx < 4) {
+                more[i] = reg[idx];
+            } else {
+                more[i] = buf->msg[idx];
+            }
         }
     }
-    return (int64_t)seL4_GetMR(0);
+    return (int64_t)mr0;
 }
 
 static inline int64_t fastix_sys0(uint64_t nr)
@@ -66,6 +103,19 @@ static inline int64_t fastix_sys3(uint64_t nr, uint64_t a0, uint64_t a1, uint64_
 {
     uint64_t a[3] = { a0, a1, a2 };
     return fastix_call(nr, 3, a, NULL);
+}
+
+static inline int64_t fastix_sys4(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
+{
+    uint64_t a[4] = { a0, a1, a2, a3 };
+    return fastix_call(nr, 4, a, NULL);
+}
+
+static inline int64_t fastix_sys5(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                  uint64_t a4)
+{
+    uint64_t a[5] = { a0, a1, a2, a3, a4 };
+    return fastix_call(nr, 5, a, NULL);
 }
 
 static inline int64_t fastix_sys6(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2,

@@ -14,12 +14,16 @@
 
 #include "cspace.h"
 #include "frame.h"
+#include "futex.h"
 #include "images.h"
 #include "kobj.h"
+#include "pipe.h"
 #include "proc.h"
 #include "procd.h"
 #include "reply.h"
 #include "server.h"
+#include "signal.h"
+#include "timer.h"
 #include "vdso.h"
 #include "vmspace.h"
 
@@ -108,11 +112,17 @@ static const char *setup(const seL4_BootInfo *bi)
     }
     vms_module_init();
     reply_module_init();
+    sig_module_init();
+    futex_module_init();
+    pipe_module_init();
     if (vdso_init() != 0) {
         return "VDSO page";
     }
     if (server_init() != 0) {
         return "server endpoint";
+    }
+    if (timer_module_init(bi->schedcontrol.start) != 0) {
+        return "timer ticker";
     }
     proc_module_init(server_endpoint(), bi->schedcontrol.start);
     return NULL;
@@ -123,8 +133,13 @@ static const char *start_init(void)
     const struct image *img = image_get(0);
     const char *argv[] = { img->name, NULL };
     const char *envp[] = { "FASTIX=1", NULL };
-    struct load_args la = { img->start, (size_t)(img->end - img->start), argv, envp,
-                            arch_read_counter() };
+    struct load_args la = {
+        .elf = img->start,
+        .elf_size = (size_t)(img->end - img->start),
+        .argv = argv,
+        .envp = envp,
+        .random_seed = arch_read_counter(),
+    };
     struct proc *init;
 
     return proc_spawn(&la, 0, &init) == 0 ? NULL : "spawning PID 1";

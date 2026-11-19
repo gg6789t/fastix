@@ -5,6 +5,8 @@
 #ifndef FASTIX_ABI_H
 #define FASTIX_ABI_H
 
+#include <stdint.h>
+
 /* IPC message layout. The seL4 message label carries the op code. */
 #define FASTIX_IPC_LABEL_BITS        12  /* op codes 0..4095 */
 #define FASTIX_IPC_FASTPATH_MRS      4   /* stay within seL4 fastpath limit */
@@ -45,8 +47,28 @@
 #define FASTIX_CLOCK_MONOTONIC  1
 #define FASTIX_CLOCK_BOOTTIME   7
 
-/* wait4 options */
+/* wait4 options (match musl <sys/wait.h>) */
 #define FASTIX_WNOHANG          1
+#define FASTIX_WUNTRACED        2
+#define FASTIX_WCONTINUED       8
+
+/* #! script interpreter recursion limit */
+#define FASTIX_SHEBANG_MAX_DEPTH 4
+
+/* posix_spawn_fast flags & argument struct (AGENTS.md 6.3 B) */
+#define FASTIX_SPAWN_SETPGROUP   0x02u
+#define FASTIX_SPAWN_SETSIGDEF   0x04u
+#define FASTIX_SPAWN_SETSIGMASK  0x08u
+
+struct fastix_spawn_args {
+    uint64_t path;       /* user pointer to NUL-terminated path */
+    uint64_t argv;       /* user pointer to NULL-terminated argv[] */
+    uint64_t envp;       /* user pointer to NULL-terminated envp[] */
+    uint32_t flags;      /* FASTIX_SPAWN_* */
+    uint32_t pgroup;     /* target pgid if FASTIX_SPAWN_SETPGROUP (0 = child pid) */
+    uint64_t sigmask;    /* signal mask if FASTIX_SPAWN_SETSIGMASK */
+    uint64_t sigdefault; /* signals reset to SIG_DFL if FASTIX_SPAWN_SETSIGDEF */
+};
 
 /* Test-only procd operations (debug/test builds, FASTIX_TEST_HOOKS). */
 #define FASTIX_TEST_PING        (FASTIX_IPC_LABEL_TEST_BASE + 0) /* MR0 n -> n + 1 */

@@ -26,7 +26,8 @@
 #define FASTIX_STACK_TOP          0x0000007000000000ULL
 
 /* Read-only pages shared with every process. */
-#define FASTIX_VDSO_ADDR          0x0000007FF0000000ULL   /* clock data + code + sigreturn */
+#define FASTIX_VDSO_ADDR          0x0000007FF0000000ULL   /* clock data (R--) */
+#define FASTIX_VDSO_CODE_ADDR     (FASTIX_VDSO_ADDR + FASTIX_PAGE_SIZE) /* sigreturn trampoline (R-X) */
 #define FASTIX_PROCINFO_ADDR      0x0000007FF0010000ULL   /* pid, uid, ... (read-only) */
 
 /* Per-thread seL4 IPC buffer: one page each, indexed by tid slot. */

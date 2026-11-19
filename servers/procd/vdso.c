@@ -1,11 +1,18 @@
 /* vdso.c - VDSO clock page (see vdso.h). */
+#include <stddef.h>
+#include <stdint.h>
+
 #include <arch/counter.h>
 #include <fastix/config.h>
+#include <libos/assert.h>
 
 #include "heap.h"
 #include "vdso.h"
 
+extern const uint8_t arch_vdso_code_start[], arch_vdso_code_end[];
+
 static struct frame *page;
+static struct frame *code_page;
 static struct fastix_vdso_data *data; /* procd's writable view */
 
 int vdso_init(void)
@@ -33,12 +40,24 @@ int vdso_init(void)
     data->boottime_offset_ns = 0;
     data->tz_offset_sec = 0;
     atomic_store_explicit(&data->seq, 2, memory_order_release);
-    return 0;
+
+    size_t code_len = (size_t)(arch_vdso_code_end - arch_vdso_code_start);
+    libos_assert(code_len <= FASTIX_PAGE_SIZE);
+    err = frame_new(&code_page);
+    if (err != 0) {
+        return err;
+    }
+    return frame_write(code_page, 0, arch_vdso_code_start, code_len, true);
 }
 
 struct frame *vdso_frame(void)
 {
     return page;
+}
+
+struct frame *vdso_code_frame(void)
+{
+    return code_page;
 }
 
 uint64_t vdso_mono_ns(void)

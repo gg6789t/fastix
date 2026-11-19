@@ -15,8 +15,11 @@
 
 LIBOS_MUST_CHECK int vdso_init(void);
 
-/* The shared clock page (map it read-only into each process). */
+/* The shared clock data page (map it R-- at FASTIX_VDSO_ADDR). */
 struct frame *vdso_frame(void);
+
+/* The shared VDSO code page (map it R-X at FASTIX_VDSO_CODE_ADDR). */
+struct frame *vdso_code_frame(void);
 
 /* CLOCK_MONOTONIC now, from the same data processes read. */
 uint64_t vdso_mono_ns(void);

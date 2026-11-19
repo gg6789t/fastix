@@ -51,6 +51,8 @@
 #define FASTIX_PROCD_OWN_PTS         64          /* page tables for procd's own mappings */
 #define FASTIX_PROCD_SCRATCH_VADDR   0x0000004000000000  /* 2 pages: procd window for filling/copying frames */
 #define FASTIX_PROCD_VDSO_VADDR      0x0000004000200000  /* procd's writable view of the VDSO data page */
+#define FASTIX_PROCD_PIPE_VADDR      0x0000004100000000  /* procd views of active pipe rings (64 x 128 KB) */
+#define FASTIX_PROCD_MAX_PIPES       64
 #define FASTIX_PROCD_HEAP_VADDR      0x0000005000000000  /* procd heap (slab pages), grows up */
 #define FASTIX_PROCD_HEAP_MAX        134217728   /* 128 MB */
 

@@ -68,7 +68,8 @@ add_library(libos STATIC
     libs/libos/ds/rtree.c
     libs/libos/elf/elf.c
     libs/libos/fmt/kprint.c
-    libs/libos/mem/mem.c)
+    libs/libos/mem/mem.c
+    libs/libos/ring/ring.c)
 fastix_sel4_target(libos)
 target_include_directories(libos PUBLIC libs/libos/include)
 
@@ -82,7 +83,8 @@ function(fastix_test_program name)
     set_target_properties(${name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 endfunction()
 
-fastix_test_program(vmtest tests/vm/vmtest.c)
+fastix_test_program(vmtest tests/vm/vmtest.c tests/vm/test_proc.c tests/vm/test_sig.c
+                    tests/vm/test_thread.c tests/vm/test_pipe.c)
 target_link_options(vmtest PRIVATE ${TEST_LINK_FLAGS} -static -Wl,--image-base=${FASTIX_EXEC_BASE})
 fastix_test_program(hello_static tests/vm/hello.c)
 target_link_options(hello_static PRIVATE ${TEST_LINK_FLAGS} -static
@@ -91,10 +93,13 @@ fastix_test_program(hello_pie tests/vm/hello.c)
 target_compile_definitions(hello_pie PRIVATE HELLO_PIE)
 target_compile_options(hello_pie PRIVATE -fPIE)
 target_link_options(hello_pie PRIVATE ${TEST_LINK_FLAGS} -Wl,-pie -Wl,--no-dynamic-linker)
+fastix_test_program(exec_helper tests/vm/exec_helper.c)
+target_link_options(exec_helper PRIVATE ${TEST_LINK_FLAGS} -static
+    -Wl,--image-base=${FASTIX_EXEC_BASE})
 
 # Embed stripped copies of the programs into procd's read-only data
 # (order = image index; images.c). Unstripped files stay in build/ for debugging.
-set(FASTIX_IMAGES vmtest hello_static hello_pie)
+set(FASTIX_IMAGES vmtest hello_static hello_pie exec_helper)
 set(IMAGES_ASM "${CMAKE_CURRENT_BINARY_DIR}/images.S")
 set(images_text "")
 set(image_files "")
@@ -122,16 +127,23 @@ set_source_files_properties("${IMAGES_ASM}" PROPERTIES OBJECT_DEPENDS "${image_f
 # --- procd: the seL4 root task ---
 add_executable(procd
     arch/${KernelSel4Arch}/crt0.S
+    arch/${KernelSel4Arch}/ticker.S
+    arch/${KernelSel4Arch}/vdso_tramp.S
     servers/procd/cspace.c
+    servers/procd/exec.c
     servers/procd/frame.c
+    servers/procd/futex.c
     servers/procd/heap.c
     servers/procd/images.c
     servers/procd/kobj.c
     servers/procd/loader.c
     servers/procd/main.c
+    servers/procd/pipe.c
     servers/procd/proc.c
     servers/procd/reply.c
     servers/procd/server.c
+    servers/procd/signal.c
+    servers/procd/timer.c
     servers/procd/vdso.c
     servers/procd/vmspace.c
     "${IMAGES_ASM}")

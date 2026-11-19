@@ -200,6 +200,20 @@ int frame_write(struct frame *f, uint64_t offset, const void *src, size_t len, b
     return err;
 }
 
+int frame_read(struct frame *f, uint64_t offset, void *dst, size_t len)
+{
+    if (offset > FASTIX_PAGE_SIZE || len > FASTIX_PAGE_SIZE - offset) {
+        return -FASTIX_EINVAL;
+    }
+    int err = scratch_map(0, f->cap);
+    if (err != 0) {
+        return err;
+    }
+    memcpy(dst, (const uint8_t *)scratch_addr(0) + offset, len);
+    scratch_unmap(0);
+    return 0;
+}
+
 int frame_copy(struct frame *dst, struct frame *src)
 {
     int err = scratch_map(0, src->cap);

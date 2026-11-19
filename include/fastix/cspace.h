@@ -27,6 +27,47 @@
 /* Level-2 CNode sizes (allocated lazily). */
 #define FASTIX_RINGS_CNODE_BITS     10  /* 1024 more ring notifications */
 #define FASTIX_THREAD_CNODE_BITS    11  /* 2 slots per thread x 1024 threads */
+#define FASTIX_CSPACE_L2_BITS       FASTIX_THREAD_CNODE_BITS /* max level-2 depth */
+
+/*
+ * Two-level user CSpace CPtr helpers (AGENTS.md 5.4).
+ * The root CNode (6 bits) uses guard = 64 - 6 - 11 = 47 zero bits, so:
+ *   - Level-1 slots 0..61 resolve with CPtr = (slot << 11) (non-CNode caps stop early).
+ *   - Level-2 THREAD_CNODE at slot 63 (11 bits, guard 0) resolves (63 << 11) | sub.
+ *   - Level-2 RINGS_CNODE at slot 62 (10 bits, guard 1 bit of 0) resolves (62 << 11) | sub.
+ */
+static inline uint64_t fastix_cptr_l1(uint32_t slot)
+{
+    return (uint64_t)slot << FASTIX_CSPACE_L2_BITS;
+}
+
+static inline uint64_t fastix_cptr_thread_ep(uint32_t tid_slot)
+{
+    if (tid_slot == 0) {
+        return fastix_cptr_l1(FASTIX_CAP_PROCD_EP_MAIN);
+    }
+    return ((uint64_t)FASTIX_CAP_THREAD_CNODE << FASTIX_CSPACE_L2_BITS) |
+           ((uint64_t)tid_slot * 2u);
+}
+
+static inline uint64_t fastix_cptr_thread_ntfn(uint32_t tid_slot)
+{
+    if (tid_slot == 0) {
+        return fastix_cptr_l1(FASTIX_CAP_MAIN_NTFN);
+    }
+    return ((uint64_t)FASTIX_CAP_THREAD_CNODE << FASTIX_CSPACE_L2_BITS) |
+           ((uint64_t)tid_slot * 2u + 1u);
+}
+
+static inline uint64_t fastix_cptr_ring(uint32_t ring_idx)
+{
+    uint32_t l1_count = FASTIX_CAP_RINGS_L1_LAST - FASTIX_CAP_RINGS_L1_FIRST + 1u;
+    if (ring_idx < l1_count) {
+        return fastix_cptr_l1(FASTIX_CAP_RINGS_L1_FIRST + ring_idx);
+    }
+    return ((uint64_t)FASTIX_CAP_RINGS_CNODE << FASTIX_CSPACE_L2_BITS) |
+           (uint64_t)(ring_idx - l1_count);
+}
 
 /* procd badge layout (64 bits): type[63:60] pid[59:32] tid_slot[31:16] gen[15:0]. */
 #define FASTIX_BADGE_SYSCALL        0x1u  /* user syscall */

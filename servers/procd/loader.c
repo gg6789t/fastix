@@ -160,12 +160,12 @@ static int build_stack(struct vmspace *vs, const struct load_args *a, const stru
         { FASTIX_AT_PHDR, elf_phdr_addr(img) },  { FASTIX_AT_PHENT, ELF64_PHDR_SIZE },
         { FASTIX_AT_PHNUM, img->phnum },         { FASTIX_AT_PAGESZ, FASTIX_PAGE_SIZE },
         { FASTIX_AT_BASE, 0 },                   { FASTIX_AT_FLAGS, 0 },
-        { FASTIX_AT_ENTRY, img->entry },         { FASTIX_AT_UID, 0 },
-        { FASTIX_AT_EUID, 0 },                   { FASTIX_AT_GID, 0 },
-        { FASTIX_AT_EGID, 0 },                   { FASTIX_AT_SECURE, 0 },
+        { FASTIX_AT_ENTRY, img->entry },         { FASTIX_AT_UID, a->uid },
+        { FASTIX_AT_EUID, a->euid },             { FASTIX_AT_GID, a->gid },
+        { FASTIX_AT_EGID, a->egid },             { FASTIX_AT_SECURE, 0 },
         { FASTIX_AT_CLKTCK, FASTIX_CLK_TCK },    { FASTIX_AT_RANDOM, random_addr },
         { FASTIX_AT_EXECFN, argc > 0 ? str_base : 0 },
-        { FASTIX_AT_SYSINFO_EHDR, 0 },           /* no VDSO ELF image yet */
+        { FASTIX_AT_SYSINFO_EHDR, a->vdso_ehdr },
         { FASTIX_AT_NULL, 0 },
     };
     for (unsigned i = 0; i < NUM_AUXV; i++) {
@@ -204,4 +204,53 @@ int loader_load(struct vmspace *vs, const struct load_args *a, uint64_t *entry, 
     }
     *entry = img.entry;
     return build_stack(vs, a, &img, sp);
+}
+
+static bool is_ws(uint8_t c)
+{
+    return c == ' ' || c == '\t';
+}
+
+int loader_parse_shebang(const uint8_t *data, size_t size, char *interp, size_t interp_cap,
+                         char *arg, size_t arg_cap)
+{
+    if (size < 2 || data[0] != '#' || data[1] != '!') {
+        return 0;
+    }
+    size_t line_end = 2;
+    while (line_end < size && data[line_end] != '\n' && data[line_end] != '\0') {
+        line_end++;
+    }
+    while (line_end > 2 && (is_ws(data[line_end - 1]) || data[line_end - 1] == '\r')) {
+        line_end--;
+    }
+    size_t i = 2;
+    while (i < line_end && is_ws(data[i])) {
+        i++;
+    }
+    size_t interp_start = i;
+    while (i < line_end && !is_ws(data[i])) {
+        i++;
+    }
+    size_t interp_len = i - interp_start;
+    if (interp_len == 0 || interp_len + 1 > interp_cap) {
+        return -FASTIX_ENOEXEC;
+    }
+    for (size_t k = 0; k < interp_len; k++) {
+        interp[k] = (char)data[interp_start + k];
+    }
+    interp[interp_len] = '\0';
+
+    while (i < line_end && is_ws(data[i])) {
+        i++;
+    }
+    size_t arg_len = line_end - i;
+    if (arg_len + 1 > arg_cap) {
+        return -FASTIX_ENOEXEC;
+    }
+    for (size_t k = 0; k < arg_len; k++) {
+        arg[k] = (char)data[i + k];
+    }
+    arg[arg_len] = '\0';
+    return 1;
 }
