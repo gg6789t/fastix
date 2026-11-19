@@ -49,11 +49,13 @@
 #define FASTIX_PROCD_MAX_SLOTS       65536       /* slots procd allocates (L2_COUNT x 4096) */
 #define FASTIX_PROCD_UT_NODES        2048        /* untyped blocks tracked by the buddy allocator */
 #define FASTIX_FRAME_CHUNK_BITS      21          /* user frames are made in 2 MB chunks */
-#define FASTIX_PROCD_OWN_PTS         64          /* page tables for procd's own mappings */
+#define FASTIX_PROCD_OWN_PTS         128         /* page tables for procd's own mappings */
 #define FASTIX_PROCD_SCRATCH_VADDR   0x0000004000000000  /* 2 pages: procd window for filling/copying frames */
 #define FASTIX_PROCD_VDSO_VADDR      0x0000004000200000  /* procd's writable view of the VDSO data page */
 #define FASTIX_PROCD_PIPE_VADDR      0x0000004100000000  /* procd views of active pipe rings (64 x 128 KB) */
+#define FASTIX_PROCD_FDEXP_VADDR     0x0000004200000000  /* procd read-only views of vfsd's FD tables (4 KB per client) */
 #define FASTIX_PROCD_MAX_PIPES       64
+#define FASTIX_PROCD_MAX_FDOBJS      1024        /* pipe-end + eventfd objects (index 0 unused) */
 #define FASTIX_PROCD_HEAP_VADDR      0x0000005000000000  /* procd heap (slab pages), grows up */
 #define FASTIX_PROCD_HEAP_MAX        134217728   /* 128 MB */
 
@@ -64,6 +66,7 @@
 #define FASTIX_DEVD_UT_NODES         512         /* buddy allocator nodes inside devd */
 #define FASTIX_DEVD_STACK_SIZE       16384       /* 16 KB devd stack */
 #define FASTIX_DEVD_PRIO             (FASTIX_DEFAULT_PRIO + 2)
+#define FASTIX_VFSD_PRIO             (FASTIX_DEFAULT_PRIO + 1)
 #define FASTIX_DRV_CNODE_BITS        6           /* 64 slots per isolated driver */
 #define FASTIX_DRV_STACK_SIZE        16384       /* 16 KB stack per isolated driver */
 #define FASTIX_DRV_PRIO              (FASTIX_DEFAULT_PRIO + 1)

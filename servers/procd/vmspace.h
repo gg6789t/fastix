@@ -107,8 +107,18 @@ LIBOS_MUST_CHECK int vms_get_frame(struct vmspace *vs, uint64_t addr, bool for_w
 LIBOS_MUST_CHECK int vms_add_special(struct vmspace *vs, uint64_t addr, struct frame *f,
                                      uint32_t prot);
 
-/* Removes a one-page special VMA previously installed by vms_add_special. */
-void vms_remove_special(struct vmspace *vs, uint64_t addr);
+/* Maps `len` bytes of `shm` (from offset 0) at `addr` as a special shared VMA; pages are
+ * created on first touch (I/O windows). Takes its own reference on `shm`. */
+LIBOS_MUST_CHECK int vms_add_special_shm(struct vmspace *vs, uint64_t addr, uint64_t len,
+                                         uint32_t prot, struct anon_shm *shm);
+
+/* Removes special VMAs (and their pages) in [addr, addr + len). */
+void vms_remove_special(struct vmspace *vs, uint64_t addr, uint64_t len);
+
+/* Anonymous shared-memory objects (MAP_SHARED backing, I/O windows). New objects hold 1 ref. */
+LIBOS_MUST_CHECK int vms_shm_new(struct anon_shm **out);
+void vms_shm_get(struct anon_shm *s);
+void vms_shm_put(struct anon_shm *s); /* frees the object and its frames at 0 refs */
 
 
 struct vm_stats vms_stats(void);

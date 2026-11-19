@@ -5,6 +5,8 @@
 #include <stdint.h>
 
 #include <fastix/abi.h>
+#include <fastix/errno.h>
+#include <fastix/pipe_abi.h>
 #include <fastix_sys/sys.h>
 
 _Noreturn void prog_main(uint64_t *sp);
@@ -105,6 +107,14 @@ static int run_check(uint64_t *sp)
     }
     if (str_eq(argv[1], "check_vfork")) {
         return 91;
+    }
+    if (str_eq(argv[1], "check_fds")) { /* argv[2] must still be open, argv[3] closed */
+        if (argc != 4) return 40;
+        if (fastix_vfs3(FASTIX_SYS_fcntl, parse_u32(argv[2]), FASTIX_F_GETFD, 0) < 0) return 41;
+        if (fastix_vfs3(FASTIX_SYS_fcntl, parse_u32(argv[3]), FASTIX_F_GETFD, 0) != -FASTIX_EBADF) {
+            return 42;
+        }
+        return 92;
     }
     return 50;
 }

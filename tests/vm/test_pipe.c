@@ -26,17 +26,17 @@ static int64_t sys_pipe2(int32_t fds[2], uint32_t flags)
 
 static int64_t sys_read(int32_t fd, void *buf, uint64_t len)
 {
-    return fastix_sys3(FASTIX_SYS_read, (uint64_t)(int64_t)fd, (uint64_t)(uintptr_t)buf, len);
+    return fastix_fd_read(fd, buf, len);
 }
 
 static int64_t sys_write(int32_t fd, const void *buf, uint64_t len)
 {
-    return fastix_sys3(FASTIX_SYS_write, (uint64_t)(int64_t)fd, (uint64_t)(uintptr_t)buf, len);
+    return fastix_fd_write(fd, buf, len);
 }
 
 static int64_t sys_close(int32_t fd)
 {
-    return fastix_sys1(FASTIX_SYS_close, (uint64_t)(int64_t)fd);
+    return fastix_vfs1(FASTIX_SYS_close, (uint64_t)(int64_t)fd);
 }
 
 /* ---- 1. Basic pipe2, EOF, EPIPE + SIGPIPE, O_NONBLOCK, dup/fcntl, zero leak ---- */
@@ -110,11 +110,11 @@ static int run_pipe_basic_once(void)
 
     /* dup & fcntl F_GETFL/F_SETFL/F_GETFD/F_SETFD */
     ok &= sys_pipe2(fds, FASTIX_O_CLOEXEC) == 0;
-    ok &= fastix_sys3(FASTIX_SYS_fcntl, (uint64_t)fds[0], FASTIX_F_GETFD, 0) == FASTIX_FD_CLOEXEC;
-    int32_t d = (int32_t)fastix_sys1(FASTIX_SYS_dup, (uint64_t)fds[0]);
-    ok &= d >= 0 && fastix_sys3(FASTIX_SYS_fcntl, (uint64_t)d, FASTIX_F_GETFD, 0) == 0;
-    ok &= fastix_sys3(FASTIX_SYS_fcntl, (uint64_t)d, FASTIX_F_SETFL, FASTIX_O_NONBLOCK) == 0;
-    ok &= fastix_sys3(FASTIX_SYS_fcntl, (uint64_t)fds[0], FASTIX_F_GETFL, 0) == FASTIX_O_NONBLOCK;
+    ok &= fastix_vfs3(FASTIX_SYS_fcntl, (uint64_t)fds[0], FASTIX_F_GETFD, 0) == FASTIX_FD_CLOEXEC;
+    int32_t d = (int32_t)fastix_vfs1(FASTIX_SYS_dup, (uint64_t)fds[0]);
+    ok &= d >= 0 && fastix_vfs3(FASTIX_SYS_fcntl, (uint64_t)d, FASTIX_F_GETFD, 0) == 0;
+    ok &= fastix_vfs3(FASTIX_SYS_fcntl, (uint64_t)d, FASTIX_F_SETFL, FASTIX_O_NONBLOCK) == 0;
+    ok &= fastix_vfs3(FASTIX_SYS_fcntl, (uint64_t)fds[0], FASTIX_F_GETFL, 0) == FASTIX_O_NONBLOCK;
     ok &= sys_close(d) == 0 && sys_close(fds[0]) == 0 && sys_close(fds[1]) == 0;
     return ok;
 }

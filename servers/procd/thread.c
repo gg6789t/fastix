@@ -147,7 +147,7 @@ int proc_thread_create(struct thread *caller, uint64_t entry, uint64_t stack, ui
     }
     if (err != 0) {
         if (ipcbuf_mapped) {
-            vms_remove_special(p->vs, ipcbuf_vaddr);
+            vms_remove_special(p->vs, ipcbuf_vaddr, FASTIX_PAGE_SIZE);
         }
         if (ep_minted) {
             (void)seL4_CNode_Delete(p->thread_cnode.cap, (seL4_Word)slot * 2u,
@@ -173,7 +173,7 @@ static void destroy_single_thread(struct proc *p, struct thread *t)
                              ? NULL
                              : LIST_ENTRY(p->threads.next, struct thread, link);
     }
-    vms_remove_special(p->vs, ipcbuf_vaddr);
+    vms_remove_special(p->vs, ipcbuf_vaddr, FASTIX_PAGE_SIZE);
     if (slot != 0 && p->thread_cnode.block != NULL) {
         (void)seL4_CNode_Delete(p->thread_cnode.cap, (seL4_Word)slot * 2u,
                                 FASTIX_THREAD_CNODE_BITS);

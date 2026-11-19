@@ -13,7 +13,9 @@
 #include <arch/regs.h>
 #include <fastix/abi.h>
 #include <fastix/cspace.h>
+#include <fastix/errno.h>
 #include <fastix/vdso.h>
+#include <fastix/vfs_proto.h>
 #include <fastix/vspace.h>
 #include <sel4/sel4.h>
 
@@ -47,8 +49,8 @@ static inline void fastix_sys_init(void)
  * procd endpoint and IPC buffer (from TPIDRRO_EL0), never the global libsel4
  * IPC buffer pointer. Returns MR0 (>= 0 success, -errno failure).
  */
-static inline int64_t fastix_call(uint64_t nr, unsigned nargs, const uint64_t *args,
-                                  uint64_t more[FASTIX_CALL_MORE])
+static inline int64_t fastix_call_ep(seL4_CPtr ep, uint64_t nr, unsigned nargs,
+                                     const uint64_t *args, uint64_t more[FASTIX_CALL_MORE])
 {
     seL4_IPCBuffer *buf = fastix_ipcbuf();
     seL4_Word mr0 = nargs > 0 ? args[0] : 0;
@@ -61,7 +63,7 @@ static inline int64_t fastix_call(uint64_t nr, unsigned nargs, const uint64_t *a
 
     seL4_Word badge = 0;
     seL4_MessageInfo_t out_info = { { 0 } };
-    arm_sys_send_recv(seL4_SysCall, fastix_procd_ep(), &badge,
+    arm_sys_send_recv(seL4_SysCall, ep, &badge,
                       seL4_MessageInfo_new(nr, 0, 0, nargs).words[0], &out_info.words[0],
                       &mr0, &mr1, &mr2, &mr3, 0);
 
@@ -80,6 +82,12 @@ static inline int64_t fastix_call(uint64_t nr, unsigned nargs, const uint64_t *a
         }
     }
     return (int64_t)mr0;
+}
+
+static inline int64_t fastix_call(uint64_t nr, unsigned nargs, const uint64_t *args,
+                                  uint64_t more[FASTIX_CALL_MORE])
+{
+    return fastix_call_ep(fastix_procd_ep(), nr, nargs, args, more);
 }
 
 static inline int64_t fastix_sys0(uint64_t nr)
@@ -166,6 +174,86 @@ static inline uint64_t fastix_clock_realtime_ns(void)
 static inline const struct fastix_procinfo *fastix_procinfo(void)
 {
     return (const struct fastix_procinfo *)FASTIX_PROCINFO_ADDR;
+}
+
+/* ---- vfsd (docs/adr/0003-vfsd-core.md) ---- */
+
+/* This thread's I/O window: pointers passed to vfsd must point into it. */
+static inline void *fastix_iowin(void)
+{
+    return (void *)(uintptr_t)(FASTIX_IOWIN_BASE +
+                               (uint64_t)fastix_tid_slot() * FASTIX_IOWIN_STRIDE);
+}
+
+static inline int64_t fastix_vfs(uint64_t nr, unsigned nargs, const uint64_t *args,
+                                 uint64_t more[FASTIX_CALL_MORE])
+{
+    return fastix_call_ep(fastix_cptr_l1(FASTIX_CAP_VFSD_EP), nr, nargs, args, more);
+}
+
+static inline int64_t fastix_vfs1(uint64_t nr, uint64_t a0)
+{
+    uint64_t a[1] = { a0 };
+    return fastix_vfs(nr, 1, a, NULL);
+}
+
+static inline int64_t fastix_vfs2(uint64_t nr, uint64_t a0, uint64_t a1)
+{
+    uint64_t a[2] = { a0, a1 };
+    return fastix_vfs(nr, 2, a, NULL);
+}
+
+static inline int64_t fastix_vfs3(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
+{
+    uint64_t a[3] = { a0, a1, a2 };
+    return fastix_vfs(nr, 3, a, NULL);
+}
+
+static inline int64_t fastix_vfs4(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
+{
+    uint64_t a[4] = { a0, a1, a2, a3 };
+    return fastix_vfs(nr, 4, a, NULL);
+}
+
+static inline int64_t fastix_vfs5(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                  uint64_t a4)
+{
+    uint64_t a[5] = { a0, a1, a2, a3, a4 };
+    return fastix_vfs(nr, 5, a, NULL);
+}
+
+/*
+ * read(2)/write(2) for any FD: asks vfsd first (copying through the I/O window, at most one
+ * window per call), and if vfsd answers that procd owns the FD (pipes, eventfds), repeats the
+ * call at procd with the caller's buffer. Phase 5 adds an FD-owner cache to skip the detour.
+ */
+static inline int64_t fastix_fd_rw(uint64_t nr, int32_t fd, void *buf, uint64_t len)
+{
+    uint64_t more[FASTIX_CALL_MORE];
+    uint64_t n = len < FASTIX_IOWIN_STRIDE ? len : FASTIX_IOWIN_STRIDE;
+    void *win = fastix_iowin();
+    if (nr == FASTIX_SYS_write) {
+        __builtin_memcpy(win, buf, (size_t)n);
+    }
+    uint64_t a[3] = { (uint64_t)(int64_t)fd, (uint64_t)(uintptr_t)win, n };
+    int64_t r = fastix_vfs(nr, 3, a, more);
+    if (r == -FASTIX_ESTALEFD && more[0] == FASTIX_OWNER_PROCD) {
+        return fastix_sys3(nr, (uint64_t)(int64_t)fd, (uint64_t)(uintptr_t)buf, len);
+    }
+    if (nr == FASTIX_SYS_read && r > 0) {
+        __builtin_memcpy(buf, win, (size_t)r);
+    }
+    return r;
+}
+
+static inline int64_t fastix_fd_read(int32_t fd, void *buf, uint64_t len)
+{
+    return fastix_fd_rw(FASTIX_SYS_read, fd, buf, len);
+}
+
+static inline int64_t fastix_fd_write(int32_t fd, const void *buf, uint64_t len)
+{
+    return fastix_fd_rw(FASTIX_SYS_write, fd, (void *)(uintptr_t)buf, len);
 }
 
 #endif /* FASTIX_SYS_SYS_H */

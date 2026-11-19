@@ -525,8 +525,8 @@ static void kick_thread(struct thread *t)
     if (t == active_caller) {
         return; /* sig_check_on_return() will deliver before replying */
     }
-    if (t->park_kind == PARK_VFORK) {
-        return; /* vfork parent stays blocked until child exits/execs */
+    if (t->park_kind == PARK_VFORK || t->park_kind == PARK_VFS) {
+        return; /* stays blocked until the vfork child execs/exits, or vfsd answers */
     }
     if (t->park_kind != PARK_NONE) {
         interrupt_parked_thread(t);

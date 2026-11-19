@@ -142,6 +142,9 @@ int sig_sys_altstack(struct thread *t, uint64_t ss_u, uint64_t oldss_u)
 
 static bool can_signal(const struct proc *caller, const struct proc *target, int sig)
 {
+    if (target->is_server) {
+        return false; /* system servers (vfsd) cannot be signalled by user processes */
+    }
     if (caller->euid == 0 || caller->uid == 0) {
         return true;
     }

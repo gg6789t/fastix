@@ -25,5 +25,7 @@ void run_wait_tests(void);
 void run_thread_tests(void);
 void run_pipe_tests(void);
 void run_dev_tests(void);
+void run_vfs_tests(void);
+void run_vfs_tests2(void);
 
 #endif /* FASTIX_VMTEST_H */

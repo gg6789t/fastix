@@ -894,6 +894,8 @@ No phase may be declared complete until **ALL** its exit criteria pass and are v
 
 - *Implementation note (2026-11-19, Phase 4B):* two narrow, downward exceptions to "drivers call `procd` only for memory/caps at init" (Section 14.5): `rtc_pl031` sends the wall-clock time to `procd` once at start (`FASTIX_SRV_SET_REALTIME_NS`), and `devd` registers driver endpoints with `procd` (`FASTIX_SRV_REGISTER_DRV`, used by test hooks until `vfsd`/`devfs` exposes devices). Both go strictly downward and `procd` checks the sender's badge. The timer stays `ticker.c` on `qemu-arm-virt` (`docs/adr/0002-timer.md`). Kernel-object allocation shared by `procd` and `devd` lives in `libs/libos/alloc/kalloc.c`.
 
+- *Implementation note (2026-11-19, Phase 4C):* `vfsd` runs as a `procd`-managed system process, reaches client memory only through each process's I/O window, and exports a one-word-per-FD table that `procd` reads instead of per-server mirrors; `procd` hands it work through a pulled queue instead of a shared ring (`docs/adr/0003-vfsd-core.md`). `tmpfs` moved from 4D into 4C as the root filesystem.
+
 ### Phase 5: Full `musl libc` Port (Static) & `fastix-cc` Sysroot
 - **Objectives:** Any portable C17/POSIX program compiles with `fastix-cc` and runs on Fastix.
 - **Deliverables:**

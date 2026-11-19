@@ -20,6 +20,7 @@
 #include "pipe.h"
 #include "proc.h"
 #include "proc_internal.h"
+#include "vfslink.h"
 #include "signal.h"
 #include "timer.h"
 #include "vdso.h"
@@ -195,9 +196,9 @@ static int proc_alloc(struct proc *parent, uint32_t ppid, struct proc **out)
         p->umask = DEFAULT_UMASK;
     }
     list_init(&p->threads);
+    p->vfs_slot = VFSLINK_NO_SLOT;
     sig_proc_init(p, parent);
     timer_proc_init(p);
-    pipe_proc_init(p, parent);
     table[pid % FASTIX_MAX_PROCS] = p;
     n_procs++;
     *out = p;
@@ -260,8 +261,8 @@ static void release(struct proc *p)
     }
     p->main_thread = NULL;
     p->live_threads = 0;
-
-    pipe_proc_cleanup(p);
+    vms_shm_put(p->iowin);
+    p->iowin = NULL;
 
     if (p->vs != NULL) {
         vms_put(p->vs);
@@ -321,7 +322,9 @@ int proc_map_special_pages(struct proc *p, struct vmspace *vs, struct frame *ipc
     if ((err = vms_add_special(vs, FASTIX_VDSO_ADDR, vdso_frame(), FASTIX_PROT_READ)) != 0 ||
         (err = vms_add_special(vs, FASTIX_VDSO_CODE_ADDR, vdso_code_frame(),
                                FASTIX_PROT_READ | FASTIX_PROT_EXEC)) != 0 ||
-        (err = vms_add_special(vs, FASTIX_PROCINFO_ADDR, p->procinfo, FASTIX_PROT_READ)) != 0) {
+        (err = vms_add_special(vs, FASTIX_PROCINFO_ADDR, p->procinfo, FASTIX_PROT_READ)) != 0 ||
+        (err = vms_add_special_shm(vs, FASTIX_IOWIN_BASE, FASTIX_IOWIN_REGION,
+                                   FASTIX_PROT_READ | FASTIX_PROT_WRITE, p->iowin)) != 0) {
         return err;
     }
     return vms_add_special(vs, FASTIX_IPCBUF_BASE, ipcbuf, FASTIX_PROT_READ | FASTIX_PROT_WRITE);
@@ -381,7 +384,8 @@ int proc_create_empty(struct proc *parent, uint32_t ppid, struct proc **out)
     if (err != 0) {
         return err;
     }
-    if ((err = vms_create(&p->vs)) == 0 && (err = build_base_caps(p, 0)) == 0 &&
+    if ((err = vms_create(&p->vs)) == 0 && (err = vms_shm_new(&p->iowin)) == 0 &&
+        (err = build_base_caps(p, 0)) == 0 &&
         (err = frame_new(&p->main_thread->ipcbuf)) == 0 &&
         (err = proc_map_special_pages(p, p->vs, p->main_thread->ipcbuf)) == 0 &&
         (err = proc_build_thread_objs(p, p->main_thread, p->vs, FASTIX_IPCBUF_BASE)) == 0) {
@@ -402,7 +406,6 @@ int proc_spawn(const struct load_args *la, uint32_t ppid, struct proc **out)
 {
     struct proc *p;
     uint64_t entry, sp;
-    seL4_UserContext regs;
 
     int err = proc_create_empty(proc_get(ppid), ppid, &p);
     if (err != 0) {
@@ -419,8 +422,8 @@ int proc_spawn(const struct load_args *la, uint32_t ppid, struct proc **out)
             err = devboot_install_devd_ep(p);
         }
         if (err == 0) {
-            arch_regs_init_entry(&regs, entry, sp, 0);
-            err = proc_thread_start(p->main_thread, &regs);
+            arch_regs_init_entry(&p->start_regs, entry, sp, 0);
+            err = vfslink_new(p, NULL, NULL, false); /* starts once vfsd has its FD table */
         }
     }
     if (err != 0) {
@@ -446,7 +449,8 @@ int proc_fork(struct thread *caller, struct proc **out)
         (err = kobj_sel4_err(
              seL4_TCB_ReadRegisters(caller->tcb.cap, 0, 0, ARCH_REGS_COUNT, &regs))) == 0) {
         arch_regs_return_from_call(&regs, 0); /* the child sees fork() return 0 */
-        err = proc_thread_start(p->main_thread, &regs);
+        p->start_regs = regs;
+        err = vfslink_new(p, parent, caller, false); /* caller and child wait for vfsd */
     }
     if (err != 0) {
         proc_discard(p);
@@ -468,6 +472,8 @@ int proc_vfork(struct thread *caller, struct reply_obj *parent_reply, struct pro
     }
     vms_get(parent->vs);
     p->vs = parent->vs;
+    vms_shm_get(parent->iowin); /* same address space, same I/O windows until execve */
+    p->iowin = parent->iowin;
     p->vfork_parent_pid = parent->pid;
 
     /* Child borrows caller's IPC buffer (caller stays parked in vfork until child exits/execs). */
@@ -486,7 +492,8 @@ int proc_vfork(struct thread *caller, struct reply_obj *parent_reply, struct pro
     if (err == 0) {
         arch_regs_return_from_call(&regs, 0); /* child sees vfork() return 0 */
         /* Note: child's tpidrro_el0 = 0 uses CAP_PROCD_EP_MAIN; caller's slot 0 IPC buffer. */
-        err = proc_thread_start(p->main_thread, &regs);
+        p->start_regs = regs;
+        err = vfslink_new(p, parent, NULL, false); /* child starts once vfsd copied the FDs */
     }
     if (err != 0) {
         proc_discard(p);
@@ -680,6 +687,7 @@ void proc_exit(struct proc *p, int status)
         }
     }
     release(p);
+    vfslink_exit(p);
     p->zombie = true;
     p->stopped = false;
     p->status = status;

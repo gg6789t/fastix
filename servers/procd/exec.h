@@ -20,9 +20,9 @@ LIBOS_MUST_CHECK int proc_execve(struct thread *caller, uint64_t path_u, uint64_
 
 /*
  * Spawns a new child directly into a fresh address space from struct fastix_spawn_args
- * at user pointer `args_u` (no fork/COW overhead). Returns 0 and child pid in *child_pid,
- * or -errno.
+ * at user pointer `args_u` (no fork/COW overhead). On 0 the caller must park in PARK_VFS:
+ * it gets the child pid once vfsd has copied the FDs. Returns -errno on failure.
  */
-LIBOS_MUST_CHECK int proc_posix_spawn(struct thread *caller, uint64_t args_u, uint32_t *child_pid);
+LIBOS_MUST_CHECK int proc_posix_spawn(struct thread *caller, uint64_t args_u);
 
 #endif /* PROCD_EXEC_H */

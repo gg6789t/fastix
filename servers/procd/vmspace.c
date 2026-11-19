@@ -38,7 +38,7 @@ struct vm_stats vms_stats(void)
 
 /* ---- anonymous shared-memory backing object ---- */
 
-static int shm_create(struct anon_shm **out)
+int vms_shm_new(struct anon_shm **out)
 {
     struct anon_shm *s = slab_alloc(&shm_cache);
     if (s == NULL) {
@@ -50,14 +50,14 @@ static int shm_create(struct anon_shm **out)
     return 0;
 }
 
-static void shm_get(struct anon_shm *s)
+void vms_shm_get(struct anon_shm *s)
 {
     if (s != NULL) {
         s->refs++;
     }
 }
 
-static void shm_put(struct anon_shm *s)
+void vms_shm_put(struct anon_shm *s)
 {
     if (s == NULL) {
         return;
@@ -305,10 +305,10 @@ static int vma_new(struct vmspace *vs, uint64_t start, uint64_t end, uint32_t pr
     v->flags = flags;
     v->shm = shm;
     v->shm_off = shm_off;
-    shm_get(shm);
+    vms_shm_get(shm);
     int err = rtree_insert(&vs->vmas, &v->node);
     if (err != 0) {
-        shm_put(shm);
+        vms_shm_put(shm);
         slab_free(&vma_cache, v);
     }
     return err;
@@ -333,7 +333,7 @@ static int split_at(struct vmspace *vs, uint64_t at)
         .shm = v->shm,
         .shm_off = v->shm != NULL ? v->shm_off + (at - v->node.start) : 0,
     };
-    shm_get(upper->shm);
+    vms_shm_get(upper->shm);
     v->node.end = at; /* shrinking in place keeps the tree ordered */
     if (rtree_insert(&vs->vmas, &upper->node) != 0) {
         libos_assert(0 && "split produced an overlap");
@@ -349,7 +349,7 @@ static void vmas_remove_range(struct vmspace *vs, uint64_t start, uint64_t end)
         struct rnode *next = rtree_next(&vs->vmas, n->end);
         struct vma *v = LIST_ENTRY(n, struct vma, node);
         rtree_remove(&vs->vmas, n);
-        shm_put(v->shm);
+        vms_shm_put(v->shm);
         slab_free(&vma_cache, v);
         n = next;
     }
@@ -482,14 +482,14 @@ int vms_mmap(struct vmspace *vs, uint64_t addr, uint64_t len, uint32_t prot, uin
     struct anon_shm *shm = NULL;
     uint32_t vma_flags = 0;
     if (map_type == FASTIX_MAP_SHARED) {
-        int err = shm_create(&shm);
+        int err = vms_shm_new(&shm);
         if (err != 0) {
             return err;
         }
         vma_flags = VMA_SHARED;
     }
     int err = vma_new(vs, addr, addr + size, prot, vma_flags, shm, 0);
-    shm_put(shm); /* VMA holds its own reference now */
+    vms_shm_put(shm); /* VMA holds its own reference now */
     if (err == 0) {
         *out = addr;
     }
@@ -674,9 +674,15 @@ int vms_add_special(struct vmspace *vs, uint64_t addr, struct frame *f, uint32_t
     return err;
 }
 
-void vms_remove_special(struct vmspace *vs, uint64_t addr)
+int vms_add_special_shm(struct vmspace *vs, uint64_t addr, uint64_t len, uint32_t prot,
+                        struct anon_shm *shm)
 {
-    vmas_remove_range(vs, addr, addr + FASTIX_PAGE_SIZE);
-    pages_remove_range(vs, addr, addr + FASTIX_PAGE_SIZE);
+    return vma_new(vs, addr, addr + len, prot, VMA_SPECIAL | VMA_SHARED, shm, 0);
+}
+
+void vms_remove_special(struct vmspace *vs, uint64_t addr, uint64_t len)
+{
+    vmas_remove_range(vs, addr, addr + len);
+    pages_remove_range(vs, addr, addr + len);
 }
 

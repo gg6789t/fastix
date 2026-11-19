@@ -86,7 +86,9 @@ static void check_edges_and_oom(void)
 {
     struct test_provider tp = { .used = 0, .budget = 1 };
     struct radix_tree t;
-    radix_init(&t, (struct slab_provider){ prov_get_page, &tp });
+    struct slab_cache nodes;
+    slab_init(&nodes, "radix_node", radix_node_size(), (struct slab_provider){ prov_get_page, &tp });
+    radix_init(&t, &nodes);
 
     int v1 = 1, v2 = 2;
     CHECK(radix_set(&t, 0, NULL, NULL) == -FASTIX_EINVAL);
@@ -95,14 +97,14 @@ static void check_edges_and_oom(void)
 
     /* Insert at 0 (height 1, 1 node). */
     CHECK(radix_set(&t, 0, &v1, NULL) == 0);
-    CHECK(t.height == 1 && t.count == 1 && t.node_cache.in_use == 1);
+    CHECK(t.height == 1 && t.count == 1 && t.node_cache->in_use == 1);
 
     /* Insert at UINT64_MAX (needs height 16 -> 31 nodes total; 1 slab page fits ~28).
      * Must fail with ENOMEM and roll back cleanly without leaking nodes or losing key 0! */
     tp.budget = 1;
     int err = radix_set(&t, UINT64_MAX, &v2, NULL);
     CHECK(err == -FASTIX_ENOMEM);
-    CHECK(t.height == 1 && t.count == 1 && t.node_cache.in_use == 1);
+    CHECK(t.height == 1 && t.count == 1 && t.node_cache->in_use == 1);
     CHECK(radix_get(&t, 0) == &v1);
     CHECK(radix_get(&t, UINT64_MAX) == NULL);
 
@@ -117,12 +119,12 @@ static void check_edges_and_oom(void)
 
     /* Delete UINT64_MAX: root must shrink all the way back to height 1! */
     CHECK(radix_del(&t, UINT64_MAX) == &v2);
-    CHECK(t.height == 1 && t.count == 1 && t.node_cache.in_use == 1);
+    CHECK(t.height == 1 && t.count == 1 && t.node_cache->in_use == 1);
     CHECK(radix_get(&t, 0) == &v1);
 
     /* Delete 0: 0 nodes in use. */
     CHECK(radix_del(&t, 0) == &v1);
-    CHECK(t.height == 0 && t.root == NULL && t.count == 0 && t.node_cache.in_use == 0);
+    CHECK(t.height == 0 && t.root == NULL && t.count == 0 && t.node_cache->in_use == 0);
     prov_free_all(&tp);
 }
 
@@ -131,7 +133,9 @@ static void run_seed(void)
     uint64_t rng = seed;
     struct test_provider tp = { .used = 0, .budget = (int)rng_range(&rng, 4, 64) };
     struct radix_tree t;
-    radix_init(&t, (struct slab_provider){ prov_get_page, &tp });
+    struct slab_cache nodes;
+    slab_init(&nodes, "radix_node", radix_node_size(), (struct slab_provider){ prov_get_page, &tp });
+    radix_init(&t, &nodes);
 
     /* Mix dense [0..63], medium [0..65535], and huge 64-bit keys including UINT64_MAX. */
     for (int i = 0; i < KEY_SPACE; i++) {
@@ -161,11 +165,11 @@ static void run_seed(void)
         if (kind < 45) {
             void *val = (void *)(uintptr_t)(rng_next(&rng) | 1ULL);
             void *old = (void *)0xdead;
-            uint64_t nodes_before = t.node_cache.in_use;
+            uint64_t nodes_before = t.node_cache->in_use;
             int err = radix_set(&t, keys[idx], val, &old);
             if (err == -FASTIX_ENOMEM) {
                 /* Must have rolled back cleanly without leaking nodes or changing key. */
-                CHECK(t.node_cache.in_use == nodes_before);
+                CHECK(t.node_cache->in_use == nodes_before);
                 CHECK(radix_get(&t, keys[idx]) == model[idx]);
             } else {
                 CHECK(err == 0);
@@ -196,7 +200,7 @@ static void run_seed(void)
         }
         CHECK(t.count == live);
         if (live == 0) {
-            CHECK(t.height == 0 && t.root == NULL && t.node_cache.in_use == 0);
+            CHECK(t.height == 0 && t.root == NULL && t.node_cache->in_use == 0);
         }
     }
 
@@ -228,7 +232,7 @@ static void run_seed(void)
             CHECK(radix_del(&t, keys[i]) == model[i]);
         }
     }
-    CHECK(t.count == 0 && t.height == 0 && t.root == NULL && t.node_cache.in_use == 0);
+    CHECK(t.count == 0 && t.height == 0 && t.root == NULL && t.node_cache->in_use == 0);
     prov_free_all(&tp);
 }
 

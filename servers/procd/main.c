@@ -26,6 +26,7 @@
 #include "signal.h"
 #include "timer.h"
 #include "vdso.h"
+#include "vfslink.h"
 #include "vmspace.h"
 
 _Static_assert(FASTIX_VSPACE_USER_END - 1 <= seL4_UserTop,
@@ -116,6 +117,9 @@ static const char *setup(const seL4_BootInfo *bi)
     sig_module_init();
     futex_module_init();
     pipe_module_init();
+    if (vfslink_init() != 0) {
+        return "vfsd link";
+    }
     if (vdso_init() != 0) {
         return "VDSO page";
     }
@@ -163,7 +167,10 @@ _Noreturn void procd_main(seL4_BootInfo *bi)
         problem = devboot_start(bi) == 0 ? NULL : "spawning devd";
     }
     if (problem == NULL) {
-        problem = start_init();
+        problem = start_init(); /* PID 1 waits until vfsd has set up its FD table */
+    }
+    if (problem == NULL) {
+        problem = vfslink_start() == 0 ? NULL : "spawning vfsd";
     }
     if (problem == NULL) {
         server_run();

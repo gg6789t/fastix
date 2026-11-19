@@ -34,13 +34,14 @@
 #define FASTIX_IPCBUF_BASE        0x0000007FF1000000ULL
 #define FASTIX_IPCBUF_STRIDE      FASTIX_PAGE_SIZE
 
-/* Per-thread shared I/O window, indexed by tid slot. */
+/* Per-thread shared I/O window, indexed by tid slot (all windows: one region). */
 #define FASTIX_IOWIN_BASE         0x0000007FF2000000ULL
 #define FASTIX_IOWIN_STRIDE       FASTIX_SHM_IO_WINDOW
+#define FASTIX_IOWIN_REGION \
+    ((unsigned long long)FASTIX_MAX_THREADS_PER_PROC * FASTIX_IOWIN_STRIDE)
 
 /* First address above everything Fastix maps for a user process. */
-#define FASTIX_VSPACE_USER_END \
-    (FASTIX_IOWIN_BASE + (unsigned long long)FASTIX_MAX_THREADS_PER_PROC * FASTIX_IOWIN_STRIDE)
+#define FASTIX_VSPACE_USER_END    (FASTIX_IOWIN_BASE + FASTIX_IOWIN_REGION)
 
 /* Compile-time proof that the regions are in order and never overlap. */
 _Static_assert(FASTIX_NULL_GUARD_END <= FASTIX_EXEC_BASE, "null guard overlaps exec");

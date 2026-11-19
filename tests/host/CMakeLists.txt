@@ -28,6 +28,9 @@ host_test(test_hashtab "${ROOT}/libs/libos/ds/hashtab.c")
 host_test(test_radix "${ROOT}/libs/libos/ds/radix.c" "${ROOT}/libs/libos/alloc/slab.c")
 host_test(test_vdso)
 host_test(test_ring "${ROOT}/libs/libos/ring/ring.c")
+host_test(test_namei "${ROOT}/servers/vfsd/namei.c" "${ROOT}/servers/vfsd/vnode.c"
+          "${ROOT}/servers/vfsd/tmpfs.c" "${ROOT}/libs/libos/alloc/slab.c"
+          "${ROOT}/libs/libos/ds/radix.c")
 host_test(test_dtb "${ROOT}/libs/libdriver/dtb.c")
 target_include_directories(test_dtb PRIVATE "${ROOT}/libs/libdriver/include")
 target_compile_definitions(test_dtb PRIVATE

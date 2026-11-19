@@ -158,7 +158,8 @@ function(fastix_test_program name)
 endfunction()
 
 fastix_test_program(vmtest tests/vm/vmtest.c tests/vm/test_proc.c tests/vm/test_sig.c
-                    tests/vm/test_wait.c tests/vm/test_thread.c tests/vm/test_pipe.c tests/vm/test_dev.c)
+                    tests/vm/test_wait.c tests/vm/test_thread.c tests/vm/test_pipe.c tests/vm/test_dev.c
+                    tests/vm/test_vfs.c tests/vm/test_vfs2.c tests/vm/vfsutil.c)
 target_link_options(vmtest PRIVATE ${TEST_LINK_FLAGS} -static -Wl,--image-base=${FASTIX_EXEC_BASE})
 fastix_test_program(hello_static tests/vm/hello.c)
 target_link_options(hello_static PRIVATE ${TEST_LINK_FLAGS} -static
@@ -171,9 +172,26 @@ fastix_test_program(exec_helper tests/vm/exec_helper.c)
 target_link_options(exec_helper PRIVATE ${TEST_LINK_FLAGS} -static
     -Wl,--image-base=${FASTIX_EXEC_BASE})
 
+# --- vfsd: VFS server, run by procd as a system process (docs/adr/0003-vfsd-core.md) ---
+add_executable(vfsd
+    servers/vfsd/start.S
+    servers/vfsd/client.c
+    servers/vfsd/fs_file.c
+    servers/vfsd/fs_path.c
+    servers/vfsd/main.c
+    servers/vfsd/namei.c
+    servers/vfsd/tmpfs.c
+    servers/vfsd/vnode.c)
+fastix_sel4_target(vfsd)
+target_include_directories(vfsd PRIVATE libs/libfastix_sys/include)
+target_compile_definitions(vfsd PRIVATE FASTIX_TEST_HOOKS) # FASTIX_VFS_TEST_STATS
+target_link_libraries(vfsd PRIVATE libos)
+target_link_options(vfsd PRIVATE ${TEST_LINK_FLAGS} -static -Wl,--image-base=${FASTIX_EXEC_BASE})
+set_target_properties(vfsd PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
 # Embed stripped copies of the programs into procd's read-only data
 # (order = image index; images.c). Unstripped files stay in build/ for debugging.
-set(FASTIX_IMAGES vmtest hello_static hello_pie exec_helper devd)
+set(FASTIX_IMAGES vmtest hello_static hello_pie exec_helper devd vfsd)
 set(IMAGES_ASM "${CMAKE_CURRENT_BINARY_DIR}/images.S")
 set(images_text "")
 set(image_files "")
@@ -217,12 +235,14 @@ add_executable(procd
     servers/procd/proc_ids.c
     servers/procd/reply.c
     servers/procd/server.c
+    servers/procd/server_vfs.c
     servers/procd/signal.c
     servers/procd/sig_sys.c
     servers/procd/ticker.c
     servers/procd/thread.c
     servers/procd/timer.c
     servers/procd/vdso.c
+    servers/procd/vfslink.c
     servers/procd/vmspace.c
     servers/procd/vm_user.c
     "${IMAGES_ASM}")

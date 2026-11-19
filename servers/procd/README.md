@@ -2,9 +2,9 @@
 
 The seL4 root task and process executive (AGENTS.md 6.3 B).
 
-**Current (Phase 4B):** procd boots, switches to its own two-level CSpace, spawns isolated `devd`
+**Current (Phase 4C):** procd boots, switches to its own two-level CSpace, spawns isolated `devd`
 (handing over the runtime DTB, Device Untypeds, `IRQControl`, and a 4 MB RAM untyped), starts PID 1
-from an embedded image, and serves process lifecycle, VM, signals, timers, threads, futex, pipes,
+from an embedded image, starts `vfsd` as a system process (PID 2), and serves process lifecycle, VM, signals, timers, threads, futex, pipes,
 eventfd, and downward Rank 20 → Rank 10 server control calls in a single-threaded event loop.
 
 - **IPC operations:**
@@ -20,11 +20,13 @@ eventfd, and downward Rank 20 → Rank 10 server control calls in a single-threa
   - Timers: `clock_gettime`, `nanosleep`, `clock_nanosleep`, `setitimer`/`getitimer` (`ITIMER_REAL`),
     `timer_create`/`settime`/`gettime`/`getoverrun`/`delete`.
   - Sync & local IPC: `futex` (`WAIT`/`WAKE`/`REQUEUE`/`CMP_REQUEUE`/`WAIT_BITSET`/`WAKE_BITSET`,
-    private & shared), `set_robust_list`/`get_robust_list`, `pipe2`, `eventfd2`, plus temporary
-    Phase 3 `read`/`write`/`close`/`dup`/`dup3`/`fcntl` on pipe/eventfd FDs (moves to `vfsd` in Phase 4).
+    private & shared), `set_robust_list`/`get_robust_list`, `pipe2`, `eventfd2`, and `read`/`write`
+    on pipe/eventfd FDs (found through vfsd's exported FD table; other FDs answer `-ESTALEFD`).
   - Server control (`FASTIX_BADGE_SERVER`, Rank 20 → Rank 10): `FASTIX_SRV_SET_REALTIME_NS`
     (updates VDSO `realtime_offset_ns` under seqlock), `FASTIX_SRV_REGISTER_DRV` (stores driver
     `service_ep` caps registered by `devd`).
+  - From `vfsd` (`FASTIX_SRVID_VFSD`, rank 30 → 10): `FASTIX_SRV_VFS_WORK` (pull the next work
+    item: NEW, EXEC, EXIT, INSTALL), `FASTIX_SRV_OBJ_RELEASE`, `FASTIX_SRV_OBJ_SETFL`.
   - With `FASTIX_TEST_HOOKS`: test labels in `fastix/abi.h` (ping, stats, vm stats, last kill, ipc
     count, spawn, get driver endpoint).
 - **Faults:** VM faults resolve demand-zero, COW, sole-owner upgrade, and shared pages; unhandled
@@ -46,7 +48,11 @@ eventfd, and downward Rank 20 → Rank 10 server control calls in a single-threa
   - `timer.c` (+ `ticker.c`, kept on `qemu-arm-virt` per `docs/adr/0002-timer.md`): sleeps, `ITIMER_REAL`, POSIX interval timers, driven by a suspended-when-idle 1 ms
     MCS ticker signaling a notification bound to procd's main thread.
   - `futex.c`: 64-bucket private/shared futex hash waitqueues, timeouts, robust list exit walk.
-  - `pipe.c`: 64 KB SPSC-ring pipes (17 pooled frames each, `PIPE_BUF` atomicity), `eventfd2`, and
-    the temporary 64-FD per-process table (Phase 3 only).
-  - `reply.c`, `server.c`: MCS Reply pool and non-blocking dispatch loop.
+  - `pipe.c`: 64 KB SPSC-ring pipes (17 pooled frames each, `PIPE_BUF` atomicity) and `eventfd2`;
+    one numbered object per open file description, kept alive while a thread waits on it.
+  - `vfslink.c`: the vfsd link (docs/adr/0003): starts vfsd, one client record per process (I/O
+    window, procinfo and FD-export page mapped into vfsd), the work queue, and holding a new
+    program's first thread until vfsd has set up its FD table.
+  - `reply.c`, `server.c` (+ `server_vfs.c`: calls that wait for vfsd; `server_internal.h`): MCS
+    Reply pool and non-blocking dispatch loop.
 - **Locks / rank:** single-threaded event loop (no locks); IPC rank 10 (AGENTS.md 14.5).

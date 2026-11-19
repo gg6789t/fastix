@@ -1,6 +1,7 @@
 /*
  * libos/radix.h - sparse uint64_t -> non-NULL void * radix tree.
- * 16-way (4 bits/level) tree backed by a libos slab cache. Automatically grows
+ * 16-way (4 bits/level) tree whose nodes come from a slab cache that many trees may
+ * share (create it with radix_node_size()). Automatically grows
  * height for large indices and prunes empty internal nodes on delete (0 leaks).
  */
 #ifndef LIBOS_RADIX_H
@@ -21,13 +22,16 @@ struct radix_node;
 
 struct radix_tree {
     struct radix_node *root;
-    struct slab_cache node_cache;
+    struct slab_cache *node_cache; /* shared node cache, objects of radix_node_size() */
     unsigned height; /* 0 when empty, 1..RADIX_MAX_HEIGHT otherwise */
     uint64_t count;  /* live entries */
 };
 
-/* Initializes an empty tree whose internal nodes come from provider. */
-void radix_init(struct radix_tree *t, struct slab_provider provider);
+/* Object size for the node cache passed to radix_init. */
+size_t radix_node_size(void);
+
+/* Initializes an empty tree whose internal nodes come from `node_cache`. */
+void radix_init(struct radix_tree *t, struct slab_cache *node_cache);
 
 /* Returns the value stored at index, or NULL if absent. */
 void *radix_get(const struct radix_tree *t, uint64_t index);

@@ -77,6 +77,7 @@
 /* procd server-id values stored in badge pid field for FASTIX_BADGE_SERVER. */
 #define FASTIX_SRVID_DEVD           1
 #define FASTIX_SRVID_RTC            2
+#define FASTIX_SRVID_VFSD           3
 
 /* devd client IPC labels (Rank 50/30 -> Rank 20). */
 #define DEVD_OP_INFO            0x100   /* -> MR1=drv_count, MR2=free_bytes, MR3=slots_used, MR4=dtb_size */

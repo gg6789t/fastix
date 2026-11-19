@@ -26,14 +26,6 @@
 struct proc;
 struct fd_obj;
 
-/* TEMPORARY Phase 3 FD table for pipe/eventfd only; moves to vfsd in Phase 4 (AGENTS.md 6.4). */
-#define PROCD_TEMP_MAX_FDS 64
-
-struct temp_fd {
-    struct fd_obj *obj;
-    uint32_t fd_flags; /* FASTIX_FD_CLOEXEC */
-};
-
 enum park_kind {
     PARK_NONE = 0,
     PARK_WAIT4,
@@ -47,6 +39,7 @@ enum park_kind {
     PARK_EFD_WRITE,
     PARK_WAITID,  /* waitid: wait_pid/wait_options as wait4, wait_status_ptr = siginfo pointer */
     PARK_SIGWAIT, /* rt_sigtimedwait */
+    PARK_VFS,     /* waits for a vfsd work item (fork, spawn, pipe2, eventfd2) */
 };
 
 struct futex_key {
@@ -101,6 +94,9 @@ struct thread {
     uint64_t futex_deadline_ns;
     int futex_clock;
 
+    /* Parked pipe2 waiting for vfsd to install its FDs: where to store them. */
+    uint64_t vfs_fds_u;
+
     /* Parked pipe/eventfd I/O waiter state (Step 3D). */
     struct list_node io_link;
     struct fd_obj *io_obj;
@@ -149,8 +145,12 @@ struct proc {
     uint64_t itimer_interval_ns;
     struct list_node posix_timers;
 
-    /* TEMPORARY Phase 3 FD table for pipe/eventfd only (moves to vfsd in Phase 4). */
-    struct temp_fd temp_fds[PROCD_TEMP_MAX_FDS];
+    /* vfsd link (vfslink.c, docs/adr/0003-vfsd-core.md). */
+    bool is_server;            /* system server (vfsd): user processes cannot signal it */
+    struct anon_shm *iowin;    /* every thread's I/O window, mapped at FASTIX_IOWIN_BASE */
+    uint32_t vfs_slot;         /* vfsd client slot, or FASTIX_VFS_NO_PARENT if none */
+    bool start_pending;        /* main thread starts with start_regs once vfsd is ready */
+    seL4_UserContext start_regs;
 
     /* Non-zero while this child was created by vfork() and still shares parent's vs. */
     uint32_t vfork_parent_pid;

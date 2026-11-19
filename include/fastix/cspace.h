@@ -20,7 +20,10 @@
 #define FASTIX_CAP_DEVD_EP          6   /* -> devd (PID 1 / system servers only) */
 #define FASTIX_CAP_DRV_FIRST        7   /* 7..11 test/server driver service endpoints */
 #define FASTIX_CAP_DRV_LAST         11
-#define FASTIX_CAP_RESERVED_FIRST   12  /* 12..15 reserved for future servers */
+#define FASTIX_CAP_SERVER_EP        12  /* system servers only: own service endpoint */
+#define FASTIX_CAP_SERVER_PROCD     13  /* system servers only: procd server-control endpoint */
+#define FASTIX_CAP_SERVER_REPLY     14  /* system servers only: MCS reply object */
+#define FASTIX_CAP_RESERVED_FIRST   15  /* 15 reserved for future servers */
 #define FASTIX_CAP_RESERVED_LAST    15
 #define FASTIX_CAP_RINGS_L1_FIRST   16  /* 16..47 first 32 per-FD ring notifications */
 #define FASTIX_CAP_RINGS_L1_LAST    47

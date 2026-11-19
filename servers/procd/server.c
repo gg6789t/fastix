@@ -6,6 +6,7 @@
 #include <arch/qemu_exit.h>
 #include <fastix/abi.h>
 #include <fastix/cspace.h>
+#include <fastix/dev_proto.h>
 #include <fastix/errno.h>
 #include <fastix/signal_abi.h>
 #include <libos/kprint.h>
@@ -21,24 +22,8 @@
 #include "signal.h"
 #include "timer.h"
 #include "vdso.h"
-
-#define CALL_MAX_ARGS 6
-#define CALL_MAX_RET  7
-
-enum outcome {
-    OUT_REPLY,  /* answer now with ret[0..nret-1] */
-    OUT_PARKED, /* the caller waits; its Reply object was parked */
-    OUT_NONE,   /* no answer: the caller exited or was restarted via WriteRegisters */
-};
-
-struct call {
-    struct thread *t;
-    struct proc *p;
-    seL4_Word label;
-    uint64_t arg[CALL_MAX_ARGS];
-    uint64_t ret[CALL_MAX_RET];
-    unsigned nret;
-};
+#include "server_internal.h"
+#include "vfslink.h"
 
 static struct kobj endpoint;
 static struct reply_obj *current; /* Reply object used for the next receive */
@@ -62,7 +47,7 @@ seL4_CPtr server_endpoint(void)
 }
 
 /* Takes the current Reply object for parking and installs a fresh one for the loop. */
-static int take_reply(struct reply_obj **out)
+int take_reply(struct reply_obj **out)
 {
     struct reply_obj *fresh;
     int err = reply_get(&fresh);
@@ -72,6 +57,13 @@ static int take_reply(struct reply_obj **out)
     *out = current;
     current = fresh;
     return 0;
+}
+
+/* Gives the caller back the reply object take_reply took (parking failed). */
+void untake_reply(struct reply_obj *rep)
+{
+    reply_put(current);
+    current = rep;
 }
 
 static enum outcome sys_wait4(struct call *c)
@@ -132,20 +124,12 @@ static enum outcome sys_clock_gettime(struct call *c)
     return OUT_REPLY;
 }
 
-static enum outcome sys_fork(struct call *c)
-{
-    struct proc *child;
-    int err = proc_fork(c->t, &child);
-    c->ret[0] = err != 0 ? (uint64_t)(int64_t)err : child->pid;
-    return OUT_REPLY;
-}
-
 static enum outcome sys_vfork(struct call *c)
 {
     /* If called from a worker thread or multithreaded process, fall back to COW fork so
      * sibling threads cannot race on the shared address space or main IPC buffer. */
     if (c->t->tid_slot != 0 || c->p->live_threads > 1) {
-        return sys_fork(c);
+        return park_for_vfs(c, start_fork);
     }
     struct reply_obj *rep;
     int err = take_reply(&rep);
@@ -157,8 +141,7 @@ static enum outcome sys_vfork(struct call *c)
     err = proc_vfork(c->t, rep, &child);
     if (err != 0) {
         /* Restore the reply object we took so the loop replies to the caller with -errno. */
-        reply_put(current);
-        current = rep;
+        untake_reply(rep);
         c->ret[0] = (uint64_t)(int64_t)err;
         return OUT_REPLY;
     }
@@ -175,13 +158,6 @@ static enum outcome sys_execve(struct call *c)
     return OUT_REPLY;
 }
 
-static enum outcome sys_posix_spawn(struct call *c)
-{
-    uint32_t child_pid = 0;
-    int err = proc_posix_spawn(c->t, c->arg[0], &child_pid);
-    c->ret[0] = err != 0 ? (uint64_t)(int64_t)err : child_pid;
-    return OUT_REPLY;
-}
 
 /* waitid(idtype, id, siginfo *infop, options): fills *infop; returns 0. */
 static enum outcome sys_waitid(struct call *c)
@@ -280,26 +256,6 @@ static enum outcome sys_nanosleep(struct call *c, int clockid, uint64_t flags, u
         r = err;
     }
     c->ret[0] = (uint64_t)(int64_t)r;
-    return OUT_REPLY;
-}
-
-static enum outcome sys_io_rw(struct call *c, bool is_write)
-{
-    enum park_kind pk = PARK_NONE;
-    int64_t r = is_write ? pipe_sys_write(c->t, (int32_t)c->arg[0], c->arg[1], c->arg[2], &pk)
-                         : pipe_sys_read(c->t, (int32_t)c->arg[0], c->arg[1], c->arg[2], &pk);
-    if (pk != PARK_NONE) {
-        struct reply_obj *rep;
-        int err = take_reply(&rep);
-        if (err == 0) {
-            c->t->park_reply = rep;
-            c->t->park_kind = pk;
-            return OUT_PARKED;
-        }
-        pipe_cancel_wait(c->t);
-        r = err;
-    }
-    c->ret[0] = (uint64_t)r;
     return OUT_REPLY;
 }
 
@@ -443,11 +399,11 @@ static enum outcome handle_syscall(struct call *c)
         c->ret[0] = (uint64_t)(int64_t)kobj_sel4_err(seL4_TCB_SetTLSBase(c->t->tcb.cap, c->arg[0]));
         return OUT_REPLY;
     case FASTIX_SYS_fork:
-        return sys_fork(c);
+        return park_for_vfs(c, start_fork);
     case FASTIX_SYS_vfork:
         return sys_vfork(c);
     case FASTIX_SYS_posix_spawn_fast:
-        return sys_posix_spawn(c);
+        return park_for_vfs(c, start_spawn);
     case FASTIX_SYS_execve:
         return sys_execve(c);
     case FASTIX_SYS_wait4:
@@ -611,36 +567,14 @@ static enum outcome handle_syscall(struct call *c)
         c->ret[0] = (uint64_t)(int64_t)futex_sys_get_robust_list(c->t, (uint32_t)c->arg[0],
                                                                  c->arg[1], c->arg[2]);
         return OUT_REPLY;
-    case FASTIX_SYS_pipe2: {
-        int32_t fds[2] = { -1, -1 };
-        err = pipe_sys_pipe2(p, c->arg[0], (uint32_t)c->arg[1], fds);
-        c->ret[0] = (uint64_t)(int64_t)err;
-        c->ret[1] = (uint64_t)(uint32_t)fds[0] | ((uint64_t)(uint32_t)fds[1] << 32);
-        c->nret = 2;
-        return OUT_REPLY;
-    }
+    case FASTIX_SYS_pipe2:
+        return park_for_vfs(c, start_pipe2);
     case FASTIX_SYS_eventfd2:
-        c->ret[0] = (uint64_t)(int64_t)pipe_sys_eventfd2(p, (uint32_t)c->arg[0],
-                                                         (uint32_t)c->arg[1]);
-        return OUT_REPLY;
-    case FASTIX_SYS_close:
-        c->ret[0] = (uint64_t)(int64_t)pipe_sys_close(p, (int32_t)c->arg[0]);
-        return OUT_REPLY;
+        return park_for_vfs(c, start_eventfd2);
     case FASTIX_SYS_read:
         return sys_io_rw(c, false);
     case FASTIX_SYS_write:
         return sys_io_rw(c, true);
-    case FASTIX_SYS_dup:
-        c->ret[0] = (uint64_t)(int64_t)pipe_sys_dup(p, (int32_t)c->arg[0]);
-        return OUT_REPLY;
-    case FASTIX_SYS_dup3:
-        c->ret[0] = (uint64_t)(int64_t)pipe_sys_dup3(p, (int32_t)c->arg[0], (int32_t)c->arg[1],
-                                                     (uint32_t)c->arg[2]);
-        return OUT_REPLY;
-    case FASTIX_SYS_fcntl:
-        c->ret[0] = (uint64_t)(int64_t)pipe_sys_fcntl(p, (int32_t)c->arg[0], (uint32_t)c->arg[1],
-                                                      c->arg[2]);
-        return OUT_REPLY;
     case FASTIX_SYS_sched_yield:
         seL4_Yield();
         return OUT_REPLY;
@@ -708,7 +642,11 @@ static enum outcome dispatch(seL4_Word badge, seL4_MessageInfo_t info, unsigned 
         return OUT_NONE;
     }
     if (fastix_badge_type(badge) == FASTIX_BADGE_SERVER) {
-        devboot_handle_server_msg(badge, info, nret);
+        if (fastix_badge_pid(badge) == FASTIX_SRVID_VFSD) {
+            vfslink_handle_server_msg(info, nret);
+        } else {
+            devboot_handle_server_msg(badge, info, nret);
+        }
         return OUT_REPLY;
     }
 

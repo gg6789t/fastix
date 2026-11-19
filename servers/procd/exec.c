@@ -14,7 +14,7 @@
 #include "exec.h"
 #include "images.h"
 #include "loader.h"
-#include "pipe.h"
+#include "vfslink.h"
 #include "signal.h"
 #include "timer.h"
 #include "vdso.h"
@@ -191,6 +191,15 @@ int proc_execve(struct thread *caller, uint64_t path_u, uint64_t argv_u, uint64_
         err = frame_new(&new_ipcbuf);
     }
     struct frame *use_ipcbuf = new_ipcbuf != NULL ? new_ipcbuf : caller->ipcbuf;
+    struct anon_shm *old_win = NULL; /* a vfork child stops sharing its parent's I/O windows */
+    if (err == 0 && p->vfork_parent_pid != 0) {
+        old_win = p->iowin;
+        err = vms_shm_new(&p->iowin);
+        if (err != 0) {
+            p->iowin = old_win;
+            old_win = NULL;
+        }
+    }
     if (err == 0) {
         err = proc_map_special_pages(p, new_vs, use_ipcbuf);
     }
@@ -212,6 +221,10 @@ int proc_execve(struct thread *caller, uint64_t path_u, uint64_t argv_u, uint64_
     if (err != 0) {
         if (new_ipcbuf != NULL) {
             frame_put(new_ipcbuf);
+        }
+        if (old_win != NULL) {
+            vms_shm_put(p->iowin);
+            p->iowin = old_win;
         }
         vms_put(new_vs);
         return err;
@@ -241,22 +254,24 @@ int proc_execve(struct thread *caller, uint64_t path_u, uint64_t argv_u, uint64_
     vms_put(old_vs);
     sig_on_exec(p, caller);
     timer_proc_cleanup(p);
-    pipe_proc_exec(p);
     proc_sync_info(p);
+    if (old_win != NULL) {
+        vms_shm_put(old_win);
+        err = vfslink_set_window(p);
+    }
 
     /* Unblock vfork parent if this process was its vfork child. */
     proc_vfork_wake_parent(p);
 
-    seL4_UserContext regs;
-    arch_regs_init_entry(&regs, entry, sp, 0);
-    err = proc_thread_start(caller, &regs);
-    if (err != 0) {
+    /* The new image starts once vfsd has closed the FD_CLOEXEC descriptors. */
+    arch_regs_init_entry(&p->start_regs, entry, sp, 0);
+    if (err != 0 || vfslink_exec(p) != 0) {
         proc_exit(p, FASTIX_W_SIGNALED(FASTIX_SIGKILL));
     }
     return 0;
 }
 
-int proc_posix_spawn(struct thread *caller, uint64_t args_u, uint32_t *child_pid)
+int proc_posix_spawn(struct thread *caller, uint64_t args_u)
 {
     struct proc *parent = caller->proc;
     struct fastix_spawn_args sa;
@@ -300,7 +315,6 @@ int proc_posix_spawn(struct thread *caller, uint64_t args_u, uint32_t *child_pid
         }
     }
     sig_on_exec(child, child->main_thread);
-    pipe_proc_exec(child);
 
     struct load_args la = {
         .elf = img->start,
@@ -317,14 +331,11 @@ int proc_posix_spawn(struct thread *caller, uint64_t args_u, uint32_t *child_pid
     uint64_t entry = 0, sp = 0;
     if ((err = loader_load(child->vs, &la, &entry, &sp)) == 0) {
         child->did_exec = true;
-        seL4_UserContext regs;
-        arch_regs_init_entry(&regs, entry, sp, 0);
-        err = proc_thread_start(child->main_thread, &regs);
+        arch_regs_init_entry(&child->start_regs, entry, sp, 0);
+        err = vfslink_new(child, parent, caller, true); /* caller waits; gets the child pid */
     }
     if (err != 0) {
         proc_discard(child);
-        return err;
     }
-    *child_pid = child->pid;
-    return 0;
+    return err;
 }

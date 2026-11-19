@@ -42,22 +42,27 @@ static void shrink_root(struct radix_tree *t)
            t->root->slots[0] != NULL) {
         struct radix_node *old = t->root;
         t->root = old->slots[0];
-        slab_free(&t->node_cache, old);
+        slab_free(t->node_cache, old);
         t->height--;
     }
     if (t->root != NULL && t->root->count == 0) {
-        slab_free(&t->node_cache, t->root);
+        slab_free(t->node_cache, t->root);
         t->root = NULL;
         t->height = 0;
     }
 }
 
-void radix_init(struct radix_tree *t, struct slab_provider provider)
+size_t radix_node_size(void)
+{
+    return sizeof(struct radix_node);
+}
+
+void radix_init(struct radix_tree *t, struct slab_cache *node_cache)
 {
     t->root = NULL;
     t->height = 0;
     t->count = 0;
-    slab_init(&t->node_cache, "radix_node", sizeof(struct radix_node), provider);
+    t->node_cache = node_cache;
 }
 
 void *radix_get(const struct radix_tree *t, uint64_t index)
@@ -78,7 +83,7 @@ void *radix_get(const struct radix_tree *t, uint64_t index)
 static int grow_height(struct radix_tree *t, unsigned target_h)
 {
     if (t->root == NULL) {
-        struct radix_node *n = slab_alloc(&t->node_cache);
+        struct radix_node *n = slab_alloc(t->node_cache);
         if (n == NULL) {
             return -FASTIX_ENOMEM;
         }
@@ -87,7 +92,7 @@ static int grow_height(struct radix_tree *t, unsigned target_h)
         return 0;
     }
     while (t->height < target_h) {
-        struct radix_node *parent = slab_alloc(&t->node_cache);
+        struct radix_node *parent = slab_alloc(t->node_cache);
         if (parent == NULL) {
             shrink_root(t);
             return -FASTIX_ENOMEM;
@@ -107,7 +112,7 @@ static void prune_path(struct radix_tree *t, struct radix_node **path, const uns
         if (path[lvl]->count != 0) {
             break;
         }
-        slab_free(&t->node_cache, path[lvl]);
+        slab_free(t->node_cache, path[lvl]);
         path[lvl + 1]->slots[slots[lvl + 1]] = NULL;
         path[lvl + 1]->count--;
     }
@@ -137,7 +142,7 @@ int radix_set(struct radix_tree *t, uint64_t index, void *val, void **old_out)
         path[lvl] = node;
         slots[lvl] = s;
         if (node->slots[s] == NULL) {
-            struct radix_node *child = slab_alloc(&t->node_cache);
+            struct radix_node *child = slab_alloc(t->node_cache);
             if (child == NULL) {
                 prune_path(t, path, slots, top, lvl);
                 return -FASTIX_ENOMEM;
@@ -259,7 +264,7 @@ void radix_clear(struct radix_tree *t)
     for (;;) {
         struct radix_node *node = path[lvl];
         if (lvl == 0 || next_slot[lvl] == RADIX_FANOUT) {
-            slab_free(&t->node_cache, node);
+            slab_free(t->node_cache, node);
             if (lvl == top) {
                 break;
             }

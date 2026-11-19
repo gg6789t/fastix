@@ -78,6 +78,8 @@ static int64_t sys_wait(int64_t pid, int *status)
 struct vm_test_stats vmtest_get_stats(void)
 {
     struct vm_test_stats s;
+    /* vfsd finishes exits asynchronously; let it drain its work queue first. */
+    (void)fastix_vfs(FASTIX_VFS_TEST_STATS, 0, NULL, NULL);
     (void)fastix_call(FASTIX_TEST_STATS, 0, 0, s.v);
     return s;
 }
@@ -420,6 +422,7 @@ _Noreturn void prog_main(uint64_t *sp)
     run_thread_tests();
     run_pipe_tests();
     run_dev_tests();
+    run_vfs_tests();
     kprint_str("vmtest: failures=");
     kprint_u64((uint64_t)failures);
     kprint_str("\n");
