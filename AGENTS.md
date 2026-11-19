@@ -283,6 +283,7 @@ userland/{init, toybox, dash, awk, extra, ports}  (pure standard C + POSIX ONLY;
 - **Where things stand:** `PROGRESS.md` at the repo root.
 - **Commits and pushes:** only when the owner asks (`FORMAT.md` Section 6), normally one commit per finished phase or task, pushed to `origin main`. Never commit `build/`, `build-host/`, `.venv/`, or secrets. Never edit `third_party/` (submodules stay pinned).
 - **The repo is public:** everything committed (including commit author names and emails) is visible to anyone.
+- **License:** Fastix's own code is BSD-2-Clause (`LICENSE`, "The Fastix Authors"). Third-party code keeps its own license: the seL4 kernel is GPL-2.0-only (it runs as a separate program, so the license does not extend to Fastix servers or userland), `libsel4`, `seL4_tools` and `util_libs` are mostly BSD-2-Clause. New files may add `SPDX-License-Identifier: BSD-2-Clause`. Base-image code must stay permissive (Section 8.1).
 
 ---
 
