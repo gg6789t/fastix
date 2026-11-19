@@ -1,0 +1,9 @@
+[submodule "third_party/seL4"]
+	path = third_party/seL4
+	url = https://github.com/seL4/seL4.git
+[submodule "third_party/seL4_tools"]
+	path = third_party/seL4_tools
+	url = https://github.com/seL4/seL4_tools.git
+[submodule "third_party/util_libs"]
+	path = third_party/util_libs
+	url = https://github.com/seL4/util_libs.git

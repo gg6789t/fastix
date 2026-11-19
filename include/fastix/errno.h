@@ -1,0 +1,150 @@
+/*
+ * fastix/errno.h - canonical errno values for every Fastix server and libc.
+ * Numbers match musl's generic errno list exactly, so libc needs no
+ * translation table. Servers return them negated (-FASTIX_ENOENT).
+ */
+#ifndef FASTIX_ERRNO_H
+#define FASTIX_ERRNO_H
+
+#define FASTIX_EPERM            1
+#define FASTIX_ENOENT           2
+#define FASTIX_ESRCH            3
+#define FASTIX_EINTR            4
+#define FASTIX_EIO              5
+#define FASTIX_ENXIO            6
+#define FASTIX_E2BIG            7
+#define FASTIX_ENOEXEC          8
+#define FASTIX_EBADF            9
+#define FASTIX_ECHILD          10
+#define FASTIX_EAGAIN          11
+#define FASTIX_ENOMEM          12
+#define FASTIX_EACCES          13
+#define FASTIX_EFAULT          14
+#define FASTIX_ENOTBLK         15
+#define FASTIX_EBUSY           16
+#define FASTIX_EEXIST          17
+#define FASTIX_EXDEV           18
+#define FASTIX_ENODEV          19
+#define FASTIX_ENOTDIR         20
+#define FASTIX_EISDIR          21
+#define FASTIX_EINVAL          22
+#define FASTIX_ENFILE          23
+#define FASTIX_EMFILE          24
+#define FASTIX_ENOTTY          25
+#define FASTIX_ETXTBSY         26
+#define FASTIX_EFBIG           27
+#define FASTIX_ENOSPC          28
+#define FASTIX_ESPIPE          29
+#define FASTIX_EROFS           30
+#define FASTIX_EMLINK          31
+#define FASTIX_EPIPE           32
+#define FASTIX_EDOM            33
+#define FASTIX_ERANGE          34
+#define FASTIX_EDEADLK         35
+#define FASTIX_ENAMETOOLONG    36
+#define FASTIX_ENOLCK          37
+#define FASTIX_ENOSYS          38
+#define FASTIX_ENOTEMPTY       39
+#define FASTIX_ELOOP           40
+#define FASTIX_EWOULDBLOCK     FASTIX_EAGAIN
+#define FASTIX_ENOMSG          42
+#define FASTIX_EIDRM           43
+#define FASTIX_ECHRNG          44
+#define FASTIX_EL2NSYNC        45
+#define FASTIX_EL3HLT          46
+#define FASTIX_EL3RST          47
+#define FASTIX_ELNRNG          48
+#define FASTIX_EUNATCH         49
+#define FASTIX_ENOCSI          50
+#define FASTIX_EL2HLT          51
+#define FASTIX_EBADE           52
+#define FASTIX_EBADR           53
+#define FASTIX_EXFULL          54
+#define FASTIX_ENOANO          55
+#define FASTIX_EBADRQC         56
+#define FASTIX_EBADSLT         57
+#define FASTIX_EDEADLOCK       FASTIX_EDEADLK
+#define FASTIX_EBFONT          59
+#define FASTIX_ENOSTR          60
+#define FASTIX_ENODATA         61
+#define FASTIX_ETIME           62
+#define FASTIX_ENOSR           63
+#define FASTIX_ENONET          64
+#define FASTIX_ENOPKG          65
+#define FASTIX_EREMOTE         66
+#define FASTIX_ENOLINK         67
+#define FASTIX_EADV            68
+#define FASTIX_ESRMNT          69
+#define FASTIX_ECOMM           70
+#define FASTIX_EPROTO          71
+#define FASTIX_EMULTIHOP       72
+#define FASTIX_EDOTDOT         73
+#define FASTIX_EBADMSG         74
+#define FASTIX_EOVERFLOW       75
+#define FASTIX_ENOTUNIQ        76
+#define FASTIX_EBADFD          77
+#define FASTIX_EREMCHG         78
+#define FASTIX_ELIBACC         79
+#define FASTIX_ELIBBAD         80
+#define FASTIX_ELIBSCN         81
+#define FASTIX_ELIBMAX         82
+#define FASTIX_ELIBEXEC        83
+#define FASTIX_EILSEQ          84
+#define FASTIX_ERESTART        85
+#define FASTIX_ESTRPIPE        86
+#define FASTIX_EUSERS          87
+#define FASTIX_ENOTSOCK        88
+#define FASTIX_EDESTADDRREQ    89
+#define FASTIX_EMSGSIZE        90
+#define FASTIX_EPROTOTYPE      91
+#define FASTIX_ENOPROTOOPT     92
+#define FASTIX_EPROTONOSUPPORT 93
+#define FASTIX_ESOCKTNOSUPPORT 94
+#define FASTIX_EOPNOTSUPP      95
+#define FASTIX_ENOTSUP         FASTIX_EOPNOTSUPP
+#define FASTIX_EPFNOSUPPORT    96
+#define FASTIX_EAFNOSUPPORT    97
+#define FASTIX_EADDRINUSE      98
+#define FASTIX_EADDRNOTAVAIL   99
+#define FASTIX_ENETDOWN        100
+#define FASTIX_ENETUNREACH     101
+#define FASTIX_ENETRESET       102
+#define FASTIX_ECONNABORTED    103
+#define FASTIX_ECONNRESET      104
+#define FASTIX_ENOBUFS         105
+#define FASTIX_EISCONN         106
+#define FASTIX_ENOTCONN        107
+#define FASTIX_ESHUTDOWN       108
+#define FASTIX_ETOOMANYREFS    109
+#define FASTIX_ETIMEDOUT       110
+#define FASTIX_ECONNREFUSED    111
+#define FASTIX_EHOSTDOWN       112
+#define FASTIX_EHOSTUNREACH    113
+#define FASTIX_EALREADY        114
+#define FASTIX_EINPROGRESS     115
+#define FASTIX_ESTALE          116
+#define FASTIX_EUCLEAN         117
+#define FASTIX_ENOTNAM         118
+#define FASTIX_ENAVAIL         119
+#define FASTIX_EISNAM          120
+#define FASTIX_EREMOTEIO       121
+#define FASTIX_EDQUOT          122
+#define FASTIX_ENOMEDIUM       123
+#define FASTIX_EMEDIUMTYPE     124
+#define FASTIX_ECANCELED       125
+#define FASTIX_ENOKEY          126
+#define FASTIX_EKEYEXPIRED     127
+#define FASTIX_EKEYREVOKED     128
+#define FASTIX_EKEYREJECTED    129
+#define FASTIX_EOWNERDEAD      130
+#define FASTIX_ENOTRECOVERABLE 131
+#define FASTIX_ERFKILL         132
+#define FASTIX_EHWPOISON       133
+
+/* Largest errno a reply may carry: replies in [-4095, -1] are errors. */
+#define FASTIX_MAX_ERRNO 4095
+
+/* Internal only (AGENTS.md 6.4): stale FD mirror, retry via vfsd. Never seen by apps. */
+#define FASTIX_ESTALEFD  4095
+
+#endif /* FASTIX_ERRNO_H */
