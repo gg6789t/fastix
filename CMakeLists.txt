@@ -158,7 +158,7 @@ function(fastix_test_program name)
 endfunction()
 
 fastix_test_program(vmtest tests/vm/vmtest.c tests/vm/test_proc.c tests/vm/test_sig.c
-                    tests/vm/test_thread.c tests/vm/test_pipe.c tests/vm/test_dev.c)
+                    tests/vm/test_wait.c tests/vm/test_thread.c tests/vm/test_pipe.c tests/vm/test_dev.c)
 target_link_options(vmtest PRIVATE ${TEST_LINK_FLAGS} -static -Wl,--image-base=${FASTIX_EXEC_BASE})
 fastix_test_program(hello_static tests/vm/hello.c)
 target_link_options(hello_static PRIVATE ${TEST_LINK_FLAGS} -static

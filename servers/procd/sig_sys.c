@@ -7,6 +7,7 @@
 #include <fastix/cspace.h>
 #include <fastix/errno.h>
 #include <fastix/signal_abi.h>
+#include <fastix/time_abi.h>
 #include <fastix/vspace.h>
 #include <libos/assert.h>
 #include <libos/mem.h>
@@ -16,6 +17,7 @@
 #include "pipe.h"
 #include "sig_internal.h"
 #include "signal.h"
+#include "vdso.h"
 #include "timer.h"
 
 /* ---- syscalls ---- */
@@ -310,5 +312,60 @@ void sig_sys_return(struct thread *t, uint64_t frame_sp)
     (void)seL4_TCB_Suspend(t->tcb.cap);
     if (!sig_deliver_pending(t, &regs)) {
         (void)proc_thread_start(t, &regs);
+    }
+}
+
+#define NS_PER_SEC 1000000000ULL
+
+int sig_sys_timedwait(struct thread *t, uint64_t set_u, uint64_t info_u, uint64_t timeout_u,
+                      uint64_t setsize)
+{
+    uint64_t set = 0;
+    struct fastix_timespec ts = { 0, 0 };
+
+    if (setsize != sizeof(set)) {
+        return -FASTIX_EINVAL;
+    }
+    int err = vms_read(t->proc->vs, set_u, &set, sizeof(set));
+    if (err == 0 && timeout_u != 0) {
+        err = vms_read(t->proc->vs, timeout_u, &ts, sizeof(ts));
+    }
+    if (err != 0) {
+        return err;
+    }
+    if (timeout_u != 0 && (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= (int64_t)NS_PER_SEC)) {
+        return -FASTIX_EINVAL;
+    }
+    set &= ~UNCATCHABLE_MASK;
+    int sig = sig_take_waited(t, set, info_u);
+    if (sig != 0) {
+        return sig;
+    }
+    if (sig_next_deliverable(t) != 0) {
+        return -FASTIX_EINTR; /* another signal is deliverable: its handler runs first */
+    }
+    uint64_t timeout_ns = (uint64_t)ts.tv_sec > (UINT64_MAX - (uint64_t)ts.tv_nsec) / NS_PER_SEC
+                              ? UINT64_MAX
+                              : (uint64_t)ts.tv_sec * NS_PER_SEC + (uint64_t)ts.tv_nsec;
+    if (timeout_u != 0 && timeout_ns == 0) {
+        return -FASTIX_EAGAIN; /* poll */
+    }
+    t->sigwait_set = set;
+    t->sigwait_info_ptr = info_u;
+    t->sigwait_timed = timeout_u != 0;
+    if (t->sigwait_timed) {
+        uint64_t now = vdso_mono_ns();
+        t->sleep_clock = FASTIX_CLOCK_MONOTONIC;
+        t->sleep_deadline_ns = timeout_ns > UINT64_MAX - now ? UINT64_MAX : now + timeout_ns;
+        t->sleep_rem_ptr = 0;
+        t->sleep_abstime = true;
+    }
+    return SIG_TIMEDWAIT_PARK;
+}
+
+void sig_timedwait_arm(struct thread *t)
+{
+    if (t->sigwait_timed) {
+        timer_arm_park_timeout(t);
     }
 }

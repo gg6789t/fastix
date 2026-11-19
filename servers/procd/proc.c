@@ -217,7 +217,7 @@ static void thread_release(struct thread *t)
         (void)seL4_TCB_Suspend(t->tcb.cap);
         kobj_free(&t->tcb);
     }
-    if (t->park_kind == PARK_SLEEP) {
+    if (t->park_kind == PARK_SLEEP || t->park_kind == PARK_SIGWAIT) {
         timer_cancel_sleep(t);
     } else if (t->park_kind == PARK_FUTEX) {
         futex_cancel_wait(t);
@@ -547,12 +547,15 @@ static bool child_matches_wait(const struct proc *parent, const struct proc *c, 
     return c->pgid == (uint32_t)(-pid);
 }
 
-int proc_wait(struct proc *p, int32_t pid, uint64_t options, uint32_t *child_pid, int *status)
+int proc_wait(struct proc *p, int32_t pid, uint64_t options, uint32_t *child_pid, int *status,
+              uint32_t *child_uid)
 {
-    uint64_t allowed = FASTIX_WNOHANG | FASTIX_WUNTRACED | FASTIX_WCONTINUED;
+    uint64_t allowed = FASTIX_WNOHANG | FASTIX_WUNTRACED | FASTIX_WCONTINUED | FASTIX_WEXITED |
+                       FASTIX_WNOWAIT;
     if ((options & ~allowed) != 0) {
         return -FASTIX_EINVAL;
     }
+    bool consume = (options & FASTIX_WNOWAIT) == 0; /* WNOWAIT: report, leave waitable */
     bool has_child = false;
     for (unsigned i = 0; i < FASTIX_MAX_PROCS; i++) {
         struct proc *c = table[i];
@@ -560,21 +563,25 @@ int proc_wait(struct proc *p, int32_t pid, uint64_t options, uint32_t *child_pid
             continue;
         }
         has_child = true;
+        *child_pid = c->pid;
+        *child_uid = c->uid;
         if (c->zombie) {
-            *child_pid = c->pid;
+            if (!(options & FASTIX_WEXITED)) {
+                continue;
+            }
             *status = c->status;
-            proc_free(c);
+            if (consume) {
+                proc_free(c);
+            }
             return 0;
         }
         if ((options & FASTIX_WUNTRACED) && c->stopped && !c->stop_reported) {
-            c->stop_reported = true;
-            *child_pid = c->pid;
+            c->stop_reported = c->stop_reported || consume;
             *status = FASTIX_W_STOPPED(c->stop_sig);
             return 0;
         }
         if ((options & FASTIX_WCONTINUED) && c->cont_pending) {
-            c->cont_pending = false;
-            *child_pid = c->pid;
+            c->cont_pending = c->cont_pending && !consume;
             *status = FASTIX_W_CONTINUED;
             return 0;
         }
@@ -582,12 +589,35 @@ int proc_wait(struct proc *p, int32_t pid, uint64_t options, uint32_t *child_pid
     if (!has_child) {
         return -FASTIX_ECHILD;
     }
-    if (options & FASTIX_WNOHANG) {
-        *child_pid = 0;
-        *status = 0;
-        return 0;
+    *child_pid = 0;
+    *child_uid = 0;
+    *status = 0;
+    return (options & FASTIX_WNOHANG) ? 0 : 1;
+}
+
+void proc_wait_siginfo(uint32_t child_pid, int status, uint32_t child_uid,
+                       struct fastix_siginfo *si)
+{
+    *si = (struct fastix_siginfo){ 0 };
+    if (child_pid == 0) {
+        return; /* WNOHANG and nothing to report: POSIX wants si_pid == 0 */
     }
-    return 1;
+    si->si_signo = FASTIX_SIGCHLD;
+    si->si_pid = child_pid;
+    si->si_uid = child_uid;
+    if (status == FASTIX_W_CONTINUED) {
+        si->si_code = FASTIX_CLD_CONTINUED;
+        si->si_status = FASTIX_SIGCONT;
+    } else if ((status & 0xff) == 0x7f) { /* FASTIX_W_STOPPED */
+        si->si_code = FASTIX_CLD_STOPPED;
+        si->si_status = (status >> 8) & 0xff;
+    } else if (FASTIX_W_TERMSIG(status) != 0) {
+        si->si_code = FASTIX_CLD_KILLED;
+        si->si_status = FASTIX_W_TERMSIG(status);
+    } else {
+        si->si_code = FASTIX_CLD_EXITED;
+        si->si_status = FASTIX_W_EXITCODE(status);
+    }
 }
 
 void proc_wake_waiter(struct proc *parent)
@@ -598,14 +628,28 @@ void proc_wake_waiter(struct proc *parent)
     struct list_node *n;
     LIST_FOREACH(n, &parent->threads) {
         struct thread *t = LIST_ENTRY(n, struct thread, link);
-        if (t->park_kind != PARK_WAIT4 || t->park_reply == NULL) {
+        if ((t->park_kind != PARK_WAIT4 && t->park_kind != PARK_WAITID) ||
+            t->park_reply == NULL) {
             continue;
         }
-        uint32_t child_pid = 0;
+        uint32_t child_pid = 0, child_uid = 0;
         int status = 0;
         int r = proc_wait(parent, t->wait_pid, t->wait_options | FASTIX_WNOHANG, &child_pid,
-                          &status);
+                          &status, &child_uid);
         if (r == 0 && child_pid == 0) {
+            continue;
+        }
+        if (t->park_kind == PARK_WAITID) {
+            struct fastix_siginfo si;
+            proc_wait_siginfo(child_pid, status, child_uid, &si);
+            if (r == 0 && t->wait_status_ptr != 0) {
+                r = vms_write_user(parent->vs, t->wait_status_ptr, &si, sizeof(si));
+            }
+            uint64_t mr[1] = { (uint64_t)(int64_t)r };
+            struct reply_obj *rep = t->park_reply;
+            t->park_reply = NULL;
+            t->park_kind = PARK_NONE;
+            reply_send(rep, 1, mr);
             continue;
         }
         if (r == 0 && t->wait_status_ptr != 0) {

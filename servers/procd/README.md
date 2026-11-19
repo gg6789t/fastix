@@ -9,12 +9,13 @@ eventfd, and downward Rank 20 → Rank 10 server control calls in a single-threa
 
 - **IPC operations:**
   - Process & thread: `exit` (thread), `exit_group`, `fork`, `vfork`, `posix_spawn_fast`, `execve`
-    (ELF64 + `#!` depth <= 4), `wait4` (pid/-1/0/-pgid, `WNOHANG`/`WUNTRACED`/`WCONTINUED`),
+    (ELF64 + `#!` depth <= 4), `wait4` (pid/-1/0/-pgid, `WNOHANG`/`WUNTRACED`/`WCONTINUED`), `waitid` (`P_ALL`/`P_PID`/`P_PGID`,
+    `WEXITED`/`WSTOPPED`/`WCONTINUED`/`WNOHANG`/`WNOWAIT`, SIGCHLD `siginfo`),
     `thread_create`, `set_tid_address`, `set_tls`, `getpid`/`getppid`/`gettid`,
     `getpgid`/`setpgid`/`getsid`/`setsid`, `get/set{uid,euid,reuid,resuid,gid,egid,regid,resgid}`,
     `umask`, `sched_yield`.
   - Memory: `brk`, `mmap` (anonymous `MAP_PRIVATE` & `MAP_SHARED`), `munmap`, `mprotect`.
-  - Signals: `rt_sigaction`, `rt_sigprocmask`, `rt_sigpending`, `rt_sigsuspend`, `rt_sigreturn`,
+  - Signals: `rt_sigaction`, `rt_sigprocmask`, `rt_sigpending`, `rt_sigsuspend`, `rt_sigtimedwait`, `rt_sigreturn`,
     `sigaltstack`, `kill`, `tkill`, `tgkill`, `rt_sigqueueinfo`.
   - Timers: `clock_gettime`, `nanosleep`, `clock_nanosleep`, `setitimer`/`getitimer` (`ITIMER_REAL`),
     `timer_create`/`settime`/`gettime`/`getoverrun`/`delete`.
@@ -29,8 +30,8 @@ eventfd, and downward Rank 20 → Rank 10 server control calls in a single-threa
 - **Faults:** VM faults resolve demand-zero, COW, sole-owner upgrade, and shared pages; unhandled
   faults deliver `SIGSEGV`/`SIGBUS`/`SIGILL` to a user handler if installed, else terminate the process.
 - **Modules and data structures:**
-  - `cspace.c`, `kobj.c`, `heap.c`, `frame.c`: two-level procd CSpace (65,536 slots), buddy untyped
-    objects, slab heap, pooled refcounted 4 KB frames.
+  - `cspace.c`, `kobj.c` (on the shared `libs/libos/alloc/kalloc.c`), `heap.c`, `frame.c`: two-level
+    procd CSpace (65,536 slots), buddy untyped objects, slab heap, pooled refcounted 4 KB frames.
   - `vmspace.c` (+ `vm_user.c`: checked reads/writes of user memory, `vm_internal.h`): refcounted `vmspace` (shared during `vfork`), VMA/page `rtree`s, lazy `anon_shm`
     backing for `MAP_SHARED`, safe `vms_read`/`vms_write_user`.
   - `loader.c`, `exec.c`, `images.c`: ELF64 + `#!` loader, System V stack/auxv (`AT_SYSINFO_EHDR`),

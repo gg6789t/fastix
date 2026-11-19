@@ -228,6 +228,12 @@ void timer_proc_cleanup(struct proc *p)
 
 void timer_cancel_sleep(struct thread *t)
 {
+    if (t->park_kind == PARK_SIGWAIT && t->sigwait_timed) {
+        t->sigwait_timed = false;
+        list_remove(&t->sleep_link);
+        armed_dec();
+        return;
+    }
     if (t->park_kind != PARK_SLEEP) {
         return;
     }
@@ -240,6 +246,12 @@ void timer_cancel_sleep(struct thread *t)
         struct fastix_timespec rem = ns_to_ts(rem_ns);
         (void)vms_write_user(t->proc->vs, t->sleep_rem_ptr, &rem, sizeof(rem));
     }
+}
+
+void timer_arm_park_timeout(struct thread *t)
+{
+    list_push_back(&sleepers, &t->sleep_link);
+    armed_inc();
 }
 
 /* ---- tick processing ---- */
@@ -255,10 +267,13 @@ static void tick_sleepers(void)
         }
         list_remove(n);
         armed_dec();
+        /* A sleep ends normally; a timed rt_sigtimedwait ends with EAGAIN. */
+        uint64_t ret = t->park_kind == PARK_SIGWAIT ? (uint64_t)(int64_t)-FASTIX_EAGAIN : 0;
+        t->sigwait_timed = false;
         struct reply_obj *rep = t->park_reply;
         t->park_reply = NULL;
         t->park_kind = PARK_NONE;
-        uint64_t mr[1] = { 0 };
+        uint64_t mr[1] = { ret };
         reply_send(rep, 1, mr);
     }
 }

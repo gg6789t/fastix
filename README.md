@@ -30,7 +30,7 @@ The full design and roadmap is in [`AGENTS.md`](AGENTS.md).
 | 5–10 | musl libc, shell + userland (toybox, dash), networking, SMP, x86_64, tuning | Planned |
 
 Everything is tested automatically: 10 host unit-test programs (randomized, run under
-AddressSanitizer and UndefinedBehaviorSanitizer) and 39 behavioural tests that boot Fastix
+AddressSanitizer and UndefinedBehaviorSanitizer) and 41 behavioural tests that boot Fastix
 headless in QEMU.
 
 ## Architecture

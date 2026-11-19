@@ -45,6 +45,8 @@ enum park_kind {
     PARK_PIPE_WRITE,
     PARK_EFD_READ,
     PARK_EFD_WRITE,
+    PARK_WAITID,  /* waitid: wait_pid/wait_options as wait4, wait_status_ptr = siginfo pointer */
+    PARK_SIGWAIT, /* rt_sigtimedwait */
 };
 
 struct futex_key {
@@ -84,6 +86,11 @@ struct thread {
     uint64_t sleep_rem_ptr;
     int sleep_clock;
     bool sleep_abstime;
+
+    /* Parked rt_sigtimedwait state. */
+    uint64_t sigwait_set;      /* signals that end the wait */
+    uint64_t sigwait_info_ptr; /* user siginfo pointer (0 = none) */
+    bool sigwait_timed;        /* also on the sleeper list until sleep_deadline_ns */
 
     /* Per-thread futex & thread-exit state (Step 3C). */
     uint64_t clear_child_tid;
@@ -209,12 +216,18 @@ void proc_thread_exit(struct thread *t, int code);
 void proc_kill_other_threads(struct thread *caller);
 
 /*
- * wait4 for `p`: pid -1 = any child, pid > 0 = that child, pid == 0 = caller's pgid,
- * pid < -1 = pgid == -pid.
- * Returns 0 with *child_pid and *status set (child_pid 0 if WNOHANG and none ready),
- * 1 if the caller must block, or -errno.
+ * wait4/waitid core for `p`: pid -1 = any child, pid > 0 = that child, pid == 0 = caller's
+ * pgid, pid < -1 = pgid == -pid. `options`: WEXITED (report exits), WUNTRACED/WSTOPPED,
+ * WCONTINUED, WNOHANG, WNOWAIT (report but leave the child waitable).
+ * Returns 0 with *child_pid, *status (wait status word) and *child_uid set (child_pid 0 if
+ * WNOHANG and none ready), 1 if the caller must block, or -errno.
  */
-int proc_wait(struct proc *p, int32_t pid, uint64_t options, uint32_t *child_pid, int *status);
+int proc_wait(struct proc *p, int32_t pid, uint64_t options, uint32_t *child_pid, int *status,
+              uint32_t *child_uid);
+
+/* Fills a SIGCHLD siginfo for a waitid result (all zero when child_pid is 0). */
+void proc_wait_siginfo(uint32_t child_pid, int status, uint32_t child_uid,
+                       struct fastix_siginfo *si);
 
 /* Wakes any thread of `parent` parked in wait4 if a matching child state is ready. */
 void proc_wake_waiter(struct proc *parent);

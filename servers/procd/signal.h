@@ -64,6 +64,13 @@ int sig_sys_queueinfo(struct proc *caller, uint32_t pid, int sig, uint64_t uinfo
  */
 int sig_sys_suspend(struct thread *t, uint64_t mask_u);
 
+/* rt_sigtimedwait: returns a signal number (> 0), SIG_TIMEDWAIT_PARK to park the
+ * caller (then call sig_timedwait_arm once parked), or -errno. */
+#define SIG_TIMEDWAIT_PARK 0
+int sig_sys_timedwait(struct thread *t, uint64_t set_u, uint64_t info_u, uint64_t timeout_u,
+                      uint64_t setsize);
+void sig_timedwait_arm(struct thread *t);
+
 /* rt_sigreturn: restores context & mask from user frame `frame_sp` and resumes `t`. */
 void sig_sys_return(struct thread *t, uint64_t frame_sp);
 

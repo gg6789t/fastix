@@ -37,6 +37,10 @@ int sig_next_deliverable(const struct thread *t);
 /* True if `sp` is on t's alternate signal stack. */
 bool sig_on_altstack(const struct thread *t, uint64_t sp);
 
+/* Dequeues the lowest pending signal of `t` in `set` and writes its siginfo to `info_u`
+ * (if non-zero). Returns the signal number, 0 if none is pending, or -errno. */
+int sig_take_waited(struct thread *t, uint64_t set, uint64_t info_u);
+
 /* Delivers one pending signal to suspended `t` using `regs`; false if none was deliverable. */
 bool sig_deliver_pending(struct thread *t, const seL4_UserContext *regs);
 

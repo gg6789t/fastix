@@ -21,6 +21,7 @@ _Noreturn void vmtest_exit(int code);
 /* Phase 3 & 4B test suites */
 void run_proc_tests(void);
 void run_sig_tests(void);
+void run_wait_tests(void);
 void run_thread_tests(void);
 void run_pipe_tests(void);
 void run_dev_tests(void);

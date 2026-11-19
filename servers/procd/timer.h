@@ -29,6 +29,9 @@ void timer_proc_init(struct proc *p);
 void timer_proc_cleanup(struct proc *p);
 void timer_cancel_sleep(struct thread *t);
 
+/* Puts parked `t` on the sleeper list until t->sleep_deadline_ns (rt_sigtimedwait timeout). */
+void timer_arm_park_timeout(struct thread *t);
+
 /* Syscall handlers. */
 int timer_sys_nanosleep(struct thread *t, int clockid, uint64_t flags, uint64_t req_u,
                         uint64_t rem_u);

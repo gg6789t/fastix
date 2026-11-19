@@ -79,10 +79,15 @@ static enum outcome sys_wait4(struct call *c)
     int32_t wpid = (int32_t)c->arg[0];
     uint64_t status_ptr = c->arg[1];
     uint64_t options = c->arg[2];
-    uint32_t child = 0;
+    uint32_t child = 0, child_uid = 0;
     int status = 0;
 
-    int r = proc_wait(c->p, wpid, options, &child, &status);
+    /* wait4 takes only these options and always reports exits. */
+    int r = -FASTIX_EINVAL;
+    if ((options & ~(uint64_t)(FASTIX_WNOHANG | FASTIX_WUNTRACED | FASTIX_WCONTINUED)) == 0) {
+        options |= FASTIX_WEXITED;
+        r = proc_wait(c->p, wpid, options, &child, &status, &child_uid);
+    }
     if (r == 1) {
         struct reply_obj *rep;
         int err = take_reply(&rep);
@@ -175,6 +180,70 @@ static enum outcome sys_posix_spawn(struct call *c)
     uint32_t child_pid = 0;
     int err = proc_posix_spawn(c->t, c->arg[0], &child_pid);
     c->ret[0] = err != 0 ? (uint64_t)(int64_t)err : child_pid;
+    return OUT_REPLY;
+}
+
+/* waitid(idtype, id, siginfo *infop, options): fills *infop; returns 0. */
+static enum outcome sys_waitid(struct call *c)
+{
+    uint64_t idtype = c->arg[0], id = c->arg[1], info_ptr = c->arg[2], options = c->arg[3];
+    uint64_t kinds = FASTIX_WEXITED | FASTIX_WSTOPPED | FASTIX_WCONTINUED;
+    uint64_t allowed = kinds | FASTIX_WNOHANG | FASTIX_WNOWAIT;
+    int32_t wpid = -1;
+    int r = 0;
+
+    if ((options & ~allowed) != 0 || (options & kinds) == 0 ||
+        (idtype != FASTIX_P_ALL && id > INT32_MAX)) {
+        r = -FASTIX_EINVAL;
+    } else if (idtype == FASTIX_P_PID && id > 0) {
+        wpid = (int32_t)id;
+    } else if (idtype == FASTIX_P_PGID) {
+        wpid = id == 0 ? 0 : -(int32_t)id; /* 0 = caller's own group */
+    } else if (idtype != FASTIX_P_ALL) {
+        r = -FASTIX_EINVAL;
+    }
+    uint32_t child = 0, child_uid = 0;
+    int status = 0;
+    if (r == 0) {
+        r = proc_wait(c->p, wpid, options, &child, &status, &child_uid);
+    }
+    if (r == 1) {
+        struct reply_obj *rep;
+        r = take_reply(&rep);
+        if (r == 0) {
+            c->t->park_reply = rep;
+            c->t->park_kind = PARK_WAITID;
+            c->t->wait_pid = wpid;
+            c->t->wait_options = options;
+            c->t->wait_status_ptr = info_ptr;
+            return OUT_PARKED;
+        }
+    }
+    if (r == 0 && info_ptr != 0) {
+        struct fastix_siginfo si;
+        proc_wait_siginfo(child, status, child_uid, &si);
+        r = vms_write_user(c->p->vs, info_ptr, &si, sizeof(si));
+    }
+    c->ret[0] = (uint64_t)(int64_t)r;
+    return OUT_REPLY;
+}
+
+/* rt_sigtimedwait(set *, siginfo *, timespec *timeout, setsize): returns the signal number. */
+static enum outcome sys_sigtimedwait(struct call *c)
+{
+    int r = sig_sys_timedwait(c->t, c->arg[0], c->arg[1], c->arg[2], c->arg[3]);
+    if (r == SIG_TIMEDWAIT_PARK) {
+        struct reply_obj *rep;
+        int err = take_reply(&rep);
+        if (err == 0) {
+            c->t->park_reply = rep;
+            c->t->park_kind = PARK_SIGWAIT;
+            sig_timedwait_arm(c->t);
+            return OUT_PARKED;
+        }
+        r = err;
+    }
+    c->ret[0] = (uint64_t)(int64_t)r;
     return OUT_REPLY;
 }
 
@@ -383,6 +452,8 @@ static enum outcome handle_syscall(struct call *c)
         return sys_execve(c);
     case FASTIX_SYS_wait4:
         return sys_wait4(c);
+    case FASTIX_SYS_waitid:
+        return sys_waitid(c);
     case FASTIX_SYS_getpid:
         c->ret[0] = p->pid;
         return OUT_REPLY;
@@ -478,6 +549,8 @@ static enum outcome handle_syscall(struct call *c)
         return OUT_REPLY;
     case FASTIX_SYS_rt_sigsuspend:
         return sys_sigsuspend(c);
+    case FASTIX_SYS_rt_sigtimedwait:
+        return sys_sigtimedwait(c);
     case FASTIX_SYS_rt_sigreturn:
         sig_sys_return(c->t, c->arg[0]);
         return OUT_NONE;

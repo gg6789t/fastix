@@ -51,6 +51,14 @@
 #define FASTIX_WNOHANG          1
 #define FASTIX_WUNTRACED        2
 #define FASTIX_WCONTINUED       8
+#define FASTIX_WSTOPPED         FASTIX_WUNTRACED /* waitid name for the same bit */
+#define FASTIX_WEXITED          4
+#define FASTIX_WNOWAIT          0x1000000
+
+/* waitid id types (match musl <sys/wait.h>) */
+#define FASTIX_P_ALL            0
+#define FASTIX_P_PID            1
+#define FASTIX_P_PGID           2
 
 /* #! script interpreter recursion limit */
 #define FASTIX_SHEBANG_MAX_DEPTH 4

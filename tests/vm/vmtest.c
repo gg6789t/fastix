@@ -416,6 +416,7 @@ _Noreturn void prog_main(uint64_t *sp)
     t_spawn("load_static_pie_sysv_stack", IMAGE_PIE);
     run_proc_tests();
     run_sig_tests();
+    run_wait_tests();
     run_thread_tests();
     run_pipe_tests();
     run_dev_tests();

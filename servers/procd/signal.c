@@ -395,6 +395,51 @@ static bool park_is_restartable(enum park_kind kind)
            kind == PARK_EFD_READ || kind == PARK_EFD_WRITE;
 }
 
+int sig_take_waited(struct thread *t, uint64_t set, uint64_t info_u)
+{
+    uint64_t ready = (t->pending_mask | t->proc->pending_mask) & set;
+    if (ready == 0) {
+        return 0;
+    }
+    int sig = 1 + __builtin_ctzll(ready); /* fastix_sig_bit(sig) == 1 << (sig - 1) */
+    struct fastix_siginfo info;
+    if (!dequeue_signal(t, sig, &info)) {
+        return 0;
+    }
+    if (info_u != 0) {
+        int err = vms_write_user(t->proc->vs, info_u, &info, sizeof(info));
+        if (err != 0) {
+            return err;
+        }
+    }
+    return sig;
+}
+
+/* Hands `sig` to a thread parked in rt_sigtimedwait for it (`only`: just that thread). */
+static bool wake_sigwaiter(struct proc *p, const struct thread *only, int sig)
+{
+    struct list_node *n;
+    LIST_FOREACH(n, &p->threads) {
+        struct thread *t = LIST_ENTRY(n, struct thread, link);
+        if ((only != NULL && t != only) || t->exited || t->park_kind != PARK_SIGWAIT ||
+            (t->sigwait_set & fastix_sig_bit(sig)) == 0) {
+            continue;
+        }
+        int r = sig_take_waited(t, fastix_sig_bit(sig), t->sigwait_info_ptr);
+        if (r == 0) {
+            return false;
+        }
+        timer_cancel_sleep(t); /* no-op unless the wait had a timeout */
+        struct reply_obj *rep = t->park_reply;
+        t->park_reply = NULL;
+        t->park_kind = PARK_NONE;
+        uint64_t mr[1] = { (uint64_t)(int64_t)r };
+        reply_send(rep, 1, mr);
+        return true;
+    }
+    return false;
+}
+
 /* Unparks `t` due to an unblocked signal and delivers it (handling SA_RESTART vs EINTR). */
 static void interrupt_parked_thread(struct thread *t)
 {
@@ -434,7 +479,7 @@ static void interrupt_parked_thread(struct thread *t)
     /* User handler: unpark the thread cleanly and push the signal frame. */
     enum park_kind kind = t->park_kind;
     uint64_t partial = 0;
-    if (kind == PARK_SLEEP) {
+    if (kind == PARK_SLEEP || kind == PARK_SIGWAIT) {
         timer_cancel_sleep(t);
     } else if (kind == PARK_FUTEX) {
         futex_cancel_wait(t);
@@ -567,6 +612,9 @@ int sig_send_proc(struct proc *p, int sig, const struct fastix_siginfo *info)
     if (err != 0) {
         return err;
     }
+    if (wake_sigwaiter(p, NULL, sig)) {
+        return 0;
+    }
     struct thread *target = pick_target_thread(p, sig);
     if (target != NULL) {
         kick_thread(target);
@@ -594,6 +642,9 @@ int sig_send_thread(struct thread *t, int sig, const struct fastix_siginfo *info
     int err = sigq_enqueue(&t->sigq, &t->pending_mask, &t->sigq_count, sig, info);
     if (err != 0) {
         return err;
+    }
+    if (wake_sigwaiter(t->proc, t, sig)) {
+        return 0;
     }
     kick_thread(t);
     return 0;
