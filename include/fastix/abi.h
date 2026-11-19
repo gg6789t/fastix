@@ -20,6 +20,42 @@
 #define FASTIX_REPLY_MR_RET2         1   /* second result (pipe fds, 64-bit offset, ...) */
 #define FASTIX_REPLY_MR_SIGPENDING   2   /* procd replies: pending signal hint */
 
+/* Auxiliary vector entries on the initial stack (values match musl <elf.h>). */
+#define FASTIX_AT_NULL          0
+#define FASTIX_AT_PHDR          3
+#define FASTIX_AT_PHENT         4
+#define FASTIX_AT_PHNUM         5
+#define FASTIX_AT_PAGESZ        6
+#define FASTIX_AT_BASE          7
+#define FASTIX_AT_FLAGS         8
+#define FASTIX_AT_ENTRY         9
+#define FASTIX_AT_UID           11
+#define FASTIX_AT_EUID          12
+#define FASTIX_AT_GID           13
+#define FASTIX_AT_EGID          14
+#define FASTIX_AT_CLKTCK        17
+#define FASTIX_AT_SECURE        23
+#define FASTIX_AT_RANDOM        25
+#define FASTIX_AT_EXECFN        31
+#define FASTIX_AT_SYSINFO_EHDR  33
+#define FASTIX_CLK_TCK          100
+
+/* clock ids (match musl <time.h>) */
+#define FASTIX_CLOCK_REALTIME   0
+#define FASTIX_CLOCK_MONOTONIC  1
+#define FASTIX_CLOCK_BOOTTIME   7
+
+/* wait4 options */
+#define FASTIX_WNOHANG          1
+
+/* Test-only procd operations (debug/test builds, FASTIX_TEST_HOOKS). */
+#define FASTIX_TEST_PING        (FASTIX_IPC_LABEL_TEST_BASE + 0) /* MR0 n -> n + 1 */
+#define FASTIX_TEST_STATS       (FASTIX_IPC_LABEL_TEST_BASE + 1) /* -> MR1..MR5 global counters */
+#define FASTIX_TEST_VM_STATS    (FASTIX_IPC_LABEL_TEST_BASE + 2) /* -> MR1 vmas, MR2 pages of caller */
+#define FASTIX_TEST_LAST_KILL   (FASTIX_IPC_LABEL_TEST_BASE + 3) /* MR0 pid -> MR1 sig, MR2 code, MR3 addr */
+#define FASTIX_TEST_IPC_COUNT   (FASTIX_IPC_LABEL_TEST_BASE + 4) /* -> MR1 calls made by caller so far */
+#define FASTIX_TEST_SPAWN       (FASTIX_IPC_LABEL_TEST_BASE + 5) /* MR0 image index -> new child pid */
+
 /* Syscall groups. Each group owns the numbers from its base up to the next base. */
 #define FASTIX_SYSGRP_PROC    0x000
 #define FASTIX_SYSGRP_MEM     0x040

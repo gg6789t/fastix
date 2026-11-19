@@ -43,10 +43,16 @@
 #define FASTIX_DEFAULT_TIMESLICE_US  5000
 
 /* procd internal limits and its own address-space layout (not visible to users). */
-#define FASTIX_PROCD_MAX_SLOTS       4096        /* procd root CNode slots it manages */
+#define FASTIX_PROCD_CSPACE_L1_BITS  8           /* procd CSpace level 1: 256 entries */
+#define FASTIX_PROCD_CSPACE_L2_COUNT 16          /* extra level-2 CNodes (boot CNode size each) */
+#define FASTIX_PROCD_MAX_SLOTS       65536       /* slots procd allocates (L2_COUNT x 4096) */
 #define FASTIX_PROCD_UT_NODES        2048        /* untyped blocks tracked by the buddy allocator */
-#define FASTIX_PROCD_MAX_PROC_OBJS   64          /* kernel objects per process (Phase 1 bound) */
-#define FASTIX_PROCD_SCRATCH_VADDR   0x0000004000000000  /* procd window for filling frames */
+#define FASTIX_FRAME_CHUNK_BITS      21          /* user frames are made in 2 MB chunks */
+#define FASTIX_PROCD_OWN_PTS         64          /* page tables for procd's own mappings */
+#define FASTIX_PROCD_SCRATCH_VADDR   0x0000004000000000  /* 2 pages: procd window for filling/copying frames */
+#define FASTIX_PROCD_VDSO_VADDR      0x0000004000200000  /* procd's writable view of the VDSO data page */
+#define FASTIX_PROCD_HEAP_VADDR      0x0000005000000000  /* procd heap (slab pages), grows up */
+#define FASTIX_PROCD_HEAP_MAX        134217728   /* 128 MB */
 
 /* Binary size budgets in bytes of .text+.rodata (AGENTS.md 14.4) */
 #define FASTIX_BUDGET_PROCD          196608      /* 192 KB */

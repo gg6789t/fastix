@@ -25,8 +25,10 @@ struct kobj_stats {
     uint64_t slots_used;    /* procd CNode slots in use */
 };
 
-/* Takes over the BootInfo's empty slots and RAM untypeds. Returns 0 or -errno. */
-LIBOS_MUST_CHECK int kobj_init(const seL4_BootInfo *bi);
+/* Takes over the RAM untypeds (except `skip_untyped`) and the free slots
+ * [first_slot, first_slot + num_slots). Returns 0 or -errno. */
+LIBOS_MUST_CHECK int kobj_init(const seL4_BootInfo *bi, seL4_Word skip_untyped,
+                               seL4_CPtr first_slot, seL4_Word num_slots);
 
 /* Creates one object. `param` is the size argument for variable-size types
  * (CNode radix bits, SchedContext size bits, untyped bits); 0 otherwise. */

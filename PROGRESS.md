@@ -1,40 +1,46 @@
 # Fastix Progress
 
 ## Current Phase
-**Phase 1: libos, Untyped/Cap Allocator, IPC & Multi-Task Bootstrap.** All exit criteria met (2026-11-19). Next: Phase 2.
+**Phase 2: Virtual Memory, ELF64 Loader & VDSO.** All exit criteria met (2026-11-19). Next: Phase 3.
 
-## Phase 1 Checklist
-- [x] Host tests under ASan+UBSan, 100+ random seeds (`tools/test_host.sh`, 3/3 pass):
-  - buddy untyped allocator: 200 seeds × 3,000 ops against a model of seL4 untyped caps, with injected failures. It catches 3 planted bugs.
-  - slot allocator: 200 seeds × 5,000 ops.
-  - ELF reader: bad-header cases plus 200 seeds × 2,000 random corruptions.
-- [x] QEMU: an unprivileged child (whose only cap is its badged endpoint) makes 100,000 IPC calls to procd, procd verifies every reply, and procd catches the child's deliberate fault (VM fault at 0x8)
-- [x] QEMU: 100 create/destroy cycles (199,000 calls in total) with **0 leaks**. Free untyped bytes (1,070,921,824), tracked blocks (40) and used slots (11) are identical before and after; a planted slot leak is caught on cycle 0
-- [x] Zero warnings in Fastix code (`-Werror`); `tools/build.sh` from clean succeeds
+## Phase 2 Checklist
+- [x] Host tests, ASan+UBSan, 200 seeds each (`tools/test_host.sh`, 6/6 pass): slab, range tree (AVL), VDSO clock math, plus the earlier buddy, slot and ELF tests (ELF now covers PIE). Planted bugs in slab/rtree (5) are all caught.
+- [x] NULL dereference → SIGSEGV (MAPERR at 0x8)
+- [x] Stack overflow into the guard gap → SIGSEGV (MAPERR just below the 8 MB stack)
+- [x] `mprotect(PROT_READ)` then write → SIGSEGV (ACCERR)
+- [x] Partial `munmap` splits a VMA (1 → 2 VMAs; remaining pages keep their data; the hole faults)
+- [x] Copy-on-write: the child's write stays private; afterwards the sole-owner write does not copy (frame count unchanged)
+- [x] VDSO: `getpid` + `clock_gettime` agree with the IPC versions, are monotonic, and 10,000 reads send **0** messages
+- [x] 500 × `mmap`+touch+`munmap` and 100 × `fork`+exit/fault+`wait`: **0 leaks** (free bytes, slots, frames, pages, VMAs, page tables, processes all identical)
+- [x] Static ELF and static PIE both load with a correct System V stack and auxv (child checks 11 things, exits 42)
+- [x] Phase 1 checks still covered: 100,000 IPC calls, controlled faults, zero-leak create/destroy
+- [x] 14/14 QEMU tests pass, QEMU exit 0; 3 planted procd bugs (COW, zeroing, leak) are all caught
 
 ## Done Log
-- 2026-11-19: **Phase 1 done.** procd now owns all RAM and can build, run and fully destroy isolated processes. Verified with `tools/test_host.sh` (3/3 pass) and `python3 tests/run_qemu_tests.py` (4/4 pass, QEMU exit 0).
-- 2026-11-19: Moved slab/interval tree/frame array → Phase 2, SPSC ring → Phase 3, hash/radix → Phase 4, locks → Phase 9, warm pools/SIMD → when benchmarks show the need (AGENTS.md rule 2.1.6). Plan updated.
-- 2026-11-19: **Phase 0 done** (commit `54fe7c5`). seL4 17.0.0 boots procd in QEMU; headless runner exits 0.
+- 2026-11-19: **Phase 2 done.** procd is now a real server: virtual memory, copy-on-write `fork`, `wait`, a program loader, and VDSO fast paths. Verified with a clean `tools/build.sh`, `tools/test_host.sh` (6/6) and `tests/run_qemu_tests.py` (14/14, exit 0).
+- 2026-11-19: Phase 1 done (`b7cd478`): buddy allocator, process spawn/destroy, zero-leak test.
+- 2026-11-19: Phase 0 done (`54fe7c5`): seL4 17.0.0 boots procd in QEMU.
 
 ## Next Steps
-1. Phase 2: slab allocator + interval tree (host-tested), then the VMA tree in procd.
-2. Phase 2: demand-zero paging, stack growth, copy-on-write, `mmap`/`munmap`/`mprotect`/`brk`.
-3. Phase 2: full ELF loader (System V initial stack, auxv), VDSO page + per-process info page.
+1. Phase 3: full process lifecycle (`execve`, `vfork`/`posix_spawn`, process groups/sessions, credentials), `MAP_SHARED` anonymous memory.
+2. Phase 3: signals (`sigaction`, delivery on the user stack, `sigreturn` via a VDSO trampoline, `EINTR`/`SA_RESTART`).
+3. Phase 3: threads, futex, timers, SPSC pipe rings.
 
 ## Known Issues & Open Questions
-- seL4's build can't handle spaces in paths; `tools/build.sh` builds through `~/.cache/fastix-src-<hash>`. Renaming `my stuff` would remove that.
-- The kernel config is not a formally verified seL4 configuration (ADR 0001).
-- The Phase 1 ELF loader rejects programs whose segments share a page (lld output with `-z max-page-size=4096` is fine). Phase 2 handles this.
-- Each kernel object uses its own untyped block (one retype + one revoke per object). This is simple and leak-proof, but slower than warm object pools; to be measured with `bench_fork_exit` in Phase 3.
-- IPC round trip measured about 28 µs in QEMU TCG with a debug kernel. That is emulation, **not** a benchmark.
-- Upstream seL4 build warnings remain (1 `ld.lld` `.rodata` alignment, 2 clang "unused `-c`").
+- seL4's build can't handle spaces in paths (`tools/build.sh` symlink workaround). Renaming `my stuff` would remove it.
+- Kernel config is not a formally verified seL4 configuration (ADR 0001).
+- Frames and heap pages are pooled and never returned to the untyped allocator (no memory-pressure reclaim yet).
+- Page tables stay with an address space until it exits (they are not freed on `munmap`).
+- `AT_RANDOM` bytes are derived from the clock counter (not cryptographic) until `virtio-rng` (Phase 4). `CLOCK_REALTIME` starts at 0 until an RTC driver (Phase 4).
+- A parent parked in `wait4` whose matching children all disappear without exiting would wait forever (cannot happen yet; to be handled with signals in Phase 3).
+- `procd` scans its whole 4096-entry process table on exit/wait. That's fine now, but should use child lists later.
+- The test programs need seL4 (`tests/vm`); real userland arrives with musl in Phase 5.
 
-## Key Numbers (QEMU TCG on Apple Silicon, debug kernel, Fastix code at -O2)
-| Item | Measured | Budget (AGENTS.md 1.4 / 14.4) |
+## Key Numbers (QEMU TCG on Apple Silicon, debug kernel, Fastix code -O2)
+| Item | Measured | Budget |
 | :--- | :--- | :--- |
 | seL4 kernel `.text` | 226,100 B | <= 250 KB |
-| `procd` text+rodata (incl. embedded test child) | 21,452 B | <= 192 KB |
-| `procd` bss (allocator tables + 32 KB stack) | 166,280 B | counts toward idle RAM <= 16 MB |
-| Full boot image | 355,304 B | <= 4 MB |
-| QEMU start → all Phase 1 tests done | 5.8 s | (test time, not boot time) |
+| `procd` `.text` (own code) | 25,148 B | <= 192 KB (text+rodata) |
+| `procd` `.rodata` (incl. ~14.5 KB embedded test programs) | 17,112 B | (included above) |
+| Full boot image | 372,200 B | <= 4 MB |
+| All Phase 2 QEMU tests, start to finish | ~4.4 s | test time, not boot time |

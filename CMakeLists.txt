@@ -62,50 +62,84 @@ endfunction()
 # --- libos: freestanding runtime for servers ---
 add_library(libos STATIC
     libs/libos/assert.c
+    libs/libos/alloc/slab.c
     libs/libos/alloc/ut_buddy.c
     libs/libos/cap/slot_alloc.c
+    libs/libos/ds/rtree.c
     libs/libos/elf/elf.c
     libs/libos/fmt/kprint.c
     libs/libos/mem/mem.c)
 fastix_sel4_target(libos)
 target_include_directories(libos PUBLIC libs/libos/include)
 
-# --- test child: unprivileged process used by procd's self-test ---
-add_executable(test_child tests/kernel_ipc/child.c)
-fastix_sel4_target(test_child)
-target_link_libraries(test_child PRIVATE libos)
-target_link_options(test_child PRIVATE -nostdlib -static -Wl,-e,child_start
-    -Wl,--image-base=${FASTIX_EXEC_BASE} -Wl,-z,max-page-size=4096 -Wl,--build-id=none)
+# --- test programs (embedded in procd until vfsd can load files) ---
+set(TEST_LINK_FLAGS -nostdlib -Wl,-e,_start -Wl,-z,max-page-size=4096 -Wl,--build-id=none)
+function(fastix_test_program name)
+    add_executable(${name} tests/vm/start.S ${ARGN})
+    fastix_sel4_target(${name})
+    target_include_directories(${name} PRIVATE libs/libfastix_sys/include)
+    target_link_libraries(${name} PRIVATE libos)
+    set_target_properties(${name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+endfunction()
 
-# Embed the child ELF into procd's read-only data.
-set(TEST_CHILD_ELF "${CMAKE_CURRENT_BINARY_DIR}/test_child")
-set_target_properties(test_child PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-set(CHILD_BLOB "${CMAKE_CURRENT_BINARY_DIR}/child_blob.S")
-file(WRITE "${CHILD_BLOB}"
-"    .section .rodata.test_child, \"a\"
+fastix_test_program(vmtest tests/vm/vmtest.c)
+target_link_options(vmtest PRIVATE ${TEST_LINK_FLAGS} -static -Wl,--image-base=${FASTIX_EXEC_BASE})
+fastix_test_program(hello_static tests/vm/hello.c)
+target_link_options(hello_static PRIVATE ${TEST_LINK_FLAGS} -static
+    -Wl,--image-base=${FASTIX_EXEC_BASE})
+fastix_test_program(hello_pie tests/vm/hello.c)
+target_compile_definitions(hello_pie PRIVATE HELLO_PIE)
+target_compile_options(hello_pie PRIVATE -fPIE)
+target_link_options(hello_pie PRIVATE ${TEST_LINK_FLAGS} -Wl,-pie -Wl,--no-dynamic-linker)
+
+# Embed stripped copies of the programs into procd's read-only data
+# (order = image index; images.c). Unstripped files stay in build/ for debugging.
+set(FASTIX_IMAGES vmtest hello_static hello_pie)
+set(IMAGES_ASM "${CMAKE_CURRENT_BINARY_DIR}/images.S")
+set(images_text "")
+set(image_files "")
+foreach(img IN LISTS FASTIX_IMAGES)
+    string(APPEND images_text
+"    .section .rodata.image_${img}, \"a\"
     .balign 16
-    .global fastix_test_child_start
-fastix_test_child_start:
-    .incbin \"${TEST_CHILD_ELF}\"
-    .global fastix_test_child_end
-fastix_test_child_end:
+    .global fastix_image_${img}_start
+fastix_image_${img}_start:
+    .incbin \"${CMAKE_CURRENT_BINARY_DIR}/${img}.stripped\"
+    .global fastix_image_${img}_end
+fastix_image_${img}_end:
 ")
-set_source_files_properties("${CHILD_BLOB}" PROPERTIES OBJECT_DEPENDS "${TEST_CHILD_ELF}")
+    add_custom_command(
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${img}.stripped"
+        COMMAND ${CMAKE_OBJCOPY} --strip-all "${CMAKE_CURRENT_BINARY_DIR}/${img}"
+                "${CMAKE_CURRENT_BINARY_DIR}/${img}.stripped"
+        DEPENDS ${img} VERBATIM)
+    list(APPEND image_files "${CMAKE_CURRENT_BINARY_DIR}/${img}.stripped")
+endforeach()
+add_custom_target(stripped_images DEPENDS ${image_files})
+file(WRITE "${IMAGES_ASM}" "${images_text}")
+set_source_files_properties("${IMAGES_ASM}" PROPERTIES OBJECT_DEPENDS "${image_files}")
 
 # --- procd: the seL4 root task ---
 add_executable(procd
     arch/${KernelSel4Arch}/crt0.S
+    servers/procd/cspace.c
+    servers/procd/frame.c
+    servers/procd/heap.c
+    servers/procd/images.c
     servers/procd/kobj.c
+    servers/procd/loader.c
     servers/procd/main.c
     servers/procd/proc.c
-    servers/procd/selftest.c
-    servers/procd/vm.c
-    "${CHILD_BLOB}")
+    servers/procd/reply.c
+    servers/procd/server.c
+    servers/procd/vdso.c
+    servers/procd/vmspace.c
+    "${IMAGES_ASM}")
 fastix_sel4_target(procd)
-target_include_directories(procd PRIVATE tests/kernel_ipc)
+target_compile_definitions(procd PRIVATE FASTIX_TEST_HOOKS) # test-only procd operations
 target_link_libraries(procd PRIVATE libos)
 target_link_options(procd PRIVATE -nostdlib -static)
-add_dependencies(procd test_child)
+add_dependencies(procd stripped_images)
 DeclareRootserver(procd)
 
 # Bootable image: elfloader + kernel + procd in one ELF.

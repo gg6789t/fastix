@@ -5,6 +5,7 @@
 #include <libos/assert.h>
 #include <libos/slot_alloc.h>
 
+#include "cspace.h"
 #include "kobj.h"
 
 static uint64_t slot_bits[SLOT_ALLOC_WORDS(FASTIX_PROCD_MAX_SLOTS)];
@@ -27,31 +28,29 @@ int kobj_sel4_err(seL4_Error err)
 static int backend_split(void *ctx, uint64_t parent, uint64_t slot, unsigned bits)
 {
     (void)ctx;
-    return kobj_sel4_err(seL4_Untyped_Retype(parent, seL4_UntypedObject, bits,
-                                             seL4_CapInitThreadCNode, 0, 0, slot, 1));
+    return kobj_sel4_err(cspace_retype(parent, seL4_UntypedObject, bits, slot));
 }
 
 static int backend_revoke(void *ctx, uint64_t parent)
 {
     (void)ctx;
-    return kobj_sel4_err(seL4_CNode_Revoke(seL4_CapInitThreadCNode, parent, seL4_WordBits));
+    return kobj_sel4_err(seL4_CNode_Revoke(cspace_root(), parent, seL4_WordBits));
 }
 
-int kobj_init(const seL4_BootInfo *bi)
+int kobj_init(const seL4_BootInfo *bi, seL4_Word skip_untyped, seL4_CPtr first_slot,
+              seL4_Word num_slots)
 {
-    seL4_Word empty = bi->empty.end - bi->empty.start;
-
-    if (empty > FASTIX_PROCD_MAX_SLOTS) {
-        empty = FASTIX_PROCD_MAX_SLOTS; /* manage what our bitmap can hold */
+    if (num_slots > FASTIX_PROCD_MAX_SLOTS) {
+        return -FASTIX_EINVAL;
     }
-    slot_alloc_init(&slots, bi->empty.start, empty, slot_bits);
+    slot_alloc_init(&slots, first_slot, num_slots, slot_bits);
     ut_buddy_init(&buddy, ut_nodes, FASTIX_PROCD_UT_NODES, &slots,
                   (struct ut_backend){ backend_split, backend_revoke, NULL });
 
     for (seL4_Word i = 0; i < bi->untyped.end - bi->untyped.start; i++) {
         const seL4_UntypedDesc *ut = &bi->untypedList[i];
-        if (ut->isDevice) {
-            continue; /* device memory is for devd (Phase 4) */
+        if (ut->isDevice || i == skip_untyped) {
+            continue; /* device memory is for devd (Phase 4); skip_untyped holds procd's CSpace */
         }
         int err = ut_buddy_add(&buddy, bi->untyped.start + i, ut->paddr, ut->sizeBits);
         if (err != 0) {
@@ -106,8 +105,7 @@ int kobj_alloc(seL4_Word type, seL4_Word param, struct kobj *out)
     if (err != 0) {
         goto out_block;
     }
-    err = kobj_sel4_err(seL4_Untyped_Retype(block->slot, type, param, seL4_CapInitThreadCNode,
-                                            0, 0, slot, 1));
+    err = kobj_sel4_err(cspace_retype(block->slot, type, param, slot));
     if (err != 0) {
         slot_alloc_put(&slots, slot);
         goto out_block;

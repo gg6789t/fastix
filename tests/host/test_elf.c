@@ -59,7 +59,8 @@ static void build_good(void)
 
 static int open_copy(uint8_t *img, size_t size, struct elf_image *out)
 {
-    return elf_open(out, img, size, MACHINE, LO, HI);
+    int err = elf_open(out, img, size, MACHINE);
+    return err != 0 ? err : elf_set_load(out, 0, LO, HI);
 }
 
 static void test_good_image(void)
@@ -73,6 +74,35 @@ static void test_good_image(void)
     EXPECT(seg.vaddr == LO + 0x100 && seg.filesz == 0x40 && seg.memsz == 0x1000, "segment fields");
     EXPECT(elf_segment(&img, 1, &seg) == 0, "PT_NOTE is skipped");
     EXPECT(elf_segment(&img, 2, &seg) == -FASTIX_ENOEXEC, "index past phnum rejected");
+    EXPECT(elf_phdr_addr(&img) == 0, "phdrs outside any loaded segment give 0");
+}
+
+/* A position-independent image: same file, ET_DYN, linked at 0, loaded with a bias. */
+static void test_pie_image(void)
+{
+    uint8_t img[IMG_SIZE];
+    struct elf_image e;
+    struct elf_segment seg;
+    const uint64_t bias = 0x100000000ULL;
+
+    memcpy(img, good, sizeof(img));
+    put16(img, 16, 3);                    /* ET_DYN */
+    put64(img, 24, 0x100);                /* entry, unbiased */
+    put64(img, 72, 0);                    /* segment covers the file from offset 0 ... */
+    put64(img, 80, 0);                    /* ... at address 0 (so it holds the phdrs) */
+    put64(img, 96, 0x140);
+    put64(img, 104, 0x1000);
+    EXPECT(elf_open(&e, img, sizeof(img), MACHINE) == 0 && e.type == ELF_ET_DYN, "PIE opens");
+    EXPECT(elf_set_load(&e, bias, bias, bias + 0x10000000) == 0, "PIE accepts a bias");
+    EXPECT(e.entry == bias + 0x100, "PIE entry is biased");
+    EXPECT(elf_segment(&e, 0, &seg) == 1 && seg.vaddr == bias, "PIE segment is biased");
+    EXPECT(elf_phdr_addr(&e) == bias + 64, "AT_PHDR = bias + phoff inside segment");
+
+    memcpy(img, good, sizeof(img));
+    EXPECT(elf_open(&e, img, sizeof(img), MACHINE) == 0, "ET_EXEC opens");
+    EXPECT(elf_set_load(&e, 0x1000, LO, HI) == -FASTIX_ENOEXEC, "ET_EXEC with a bias rejected");
+    EXPECT(elf_open(&e, img, sizeof(img), MACHINE) == 0, "ET_EXEC opens again");
+    EXPECT(elf_segment(&e, 0, &seg) == -FASTIX_ENOEXEC, "segments rejected before elf_set_load");
 }
 
 /* Applies one header change and expects elf_open (or segment 0) to fail. */
@@ -102,7 +132,7 @@ static void test_bad_images(void)
     expect_rejected("bad magic", 1, 'X', 1, 0);
     expect_rejected("32-bit class", 4, 1, 1, 0);
     expect_rejected("big endian", 5, 2, 1, 0);
-    expect_rejected("ET_DYN", 16, 3, 2, 0);
+    expect_rejected("ET_REL", 16, 1, 2, 0);
     expect_rejected("wrong machine", 18, 62, 2, 0);
     expect_rejected("wrong phentsize", 54, 32, 2, 0);
     expect_rejected("zero phnum", 56, 0, 2, 0);
@@ -153,6 +183,7 @@ int main(void)
 {
     build_good();
     test_good_image();
+    test_pie_image();
     test_bad_images();
     test_fuzz();
     if (failures != 0) {

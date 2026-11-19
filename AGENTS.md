@@ -853,6 +853,7 @@ No phase may be declared complete until **ALL** its exit criteria pass and are v
   - Demand-zero paging, stack auto-growth + guard-page `SIGSEGV`, Copy-on-Write (COW) refcounted frames (including single-ref fast upgrade).
   - Static & PIE ELF64 loader with System V initial stack (`argc`, `argv`, `envp`, `auxv`).
   - Global VDSO page + per-process read-only info page + `seqlock` clock reading.
+  - *Implementation notes (2026-11-19):* minimal `fork`/`exit`/`wait4` were built here because copy-on-write and fault tests need them (Phase 3 completes them). procd switched to a two-level CSpace (65,536 slots), and user frames come from a pool of 2 MB chunks, because one block + 3 slots per page could not back an 8 MB stack (measured: SIGBUS at 3.6 MB). `MAP_SHARED` (anonymous → Phase 3 with full `fork` semantics; file-backed → Phase 4) and a VDSO code page / `AT_SYSINFO_EHDR` (→ Phase 3 with the `sigreturn` trampoline) are deferred.
 - **Exit Criteria:**
   - QEMU behavioral tests verify: NULL deref → `SIGSEGV`; stack overflow into guard page → `SIGSEGV`; `mprotect(PROT_READ)` write → `SIGSEGV`; partial `munmap` splits VMA cleanly; COW write modifies child without altering parent; VDSO `getpid`/`clock_gettime` returns monotonic accurate values with 0 IPCs; 500× `mmap+touch+munmap` cycles leak 0 frames.
 

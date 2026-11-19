@@ -2,19 +2,24 @@
 
 The seL4 root task and process executive (AGENTS.md 6.3 B).
 
-**Current (Phase 1):** at boot procd prints and checks the seL4 BootInfo, takes over all RAM untypeds
-and free CNode slots, then runs a self-test. The test spawns an unprivileged child process 100 times;
-each time it serves the child's IPC calls, catches its deliberate page fault, destroys it, and checks
-that nothing leaked.
+**Current (Phase 2):** procd boots, switches to its own larger CSpace, starts PID 1 from an embedded
+program image, and then serves syscalls and page faults in one event loop.
 
-- **IPC operations:** test-only `TEST_OP_PING` / `TEST_OP_DONE` (`tests/kernel_ipc/ipc_test_proto.h`).
-  Real syscalls arrive from Phase 2 on.
-- **Data structures:**
-  - `kobj.c`: one untyped block (from `libos` `ut_buddy`) per kernel object. Freeing revokes the
-    block, so the kernel deletes the object and every cap derived from it.
-  - `vm.c`: `struct objlist` (every object a process owns), page mapping with on-demand page tables,
-    and a scratch window for filling frames.
-  - `proc.c`: `struct proc` plus spawn/destroy. A process gets a VSpace, a 64-slot CNode holding only
-    its badged procd endpoint (slot 1), a TCB, a SchedContext, and a badged fault endpoint.
-- **Locks / rank:** single-threaded; IPC rank 10 (AGENTS.md 14.5).
-- **Files:** `main.c` (boot), `kobj.c`, `vm.c`, `proc.c`, `selftest.c` (Phase 1 test driver).
+- **IPC operations:** `exit`/`exit_group`, `getpid`, `getppid`, `brk`, `mmap` (anonymous private only),
+  `munmap`, `mprotect`, `fork`, `wait4` (pid -1 or > 0, `WNOHANG`), `clock_gettime`, `sched_yield`.
+  With `FASTIX_TEST_HOOKS`: test-only labels from `fastix/abi.h` (ping, stats, last kill, spawn image).
+- **Faults:** page faults are resolved (demand-zero, copy-on-write, sole-owner upgrade) or end the
+  process with SIGSEGV (MAPERR/ACCERR) or SIGBUS (out of memory). User exceptions give SIGILL.
+- **Modules and data structures:**
+  - `cspace.c`: two-level CSpace (65,536 slots); the boot CNode stays at level-1 entry 0.
+  - `kobj.c`: kernel objects, one buddy untyped block each (free = revoke).
+  - `heap.c`: procd heap pages for slab caches, plus procd's own page tables.
+  - `frame.c`: user frames, pooled in 2 MB chunks, reference-counted, zeroed before reuse.
+  - `vmspace.c`: per-process VMAs and pages (two `rtree`s) and page tables. Copy-on-write rule:
+    writable only if the VMA allows it and the frame is not shared.
+  - `loader.c`: static ELF and static-PIE loading, plus the System V initial stack.
+  - `proc.c`: process table (pid slot = pid % 4096), spawn, fork, exit/zombie, wait.
+  - `reply.c`: pool of MCS Reply objects; a blocked `wait4` parks its Reply object.
+  - `vdso.c`: the global clock page (seqlock) and per-process info pages.
+  - `server.c`: the event loop and syscall dispatch. `images.c`: embedded program images.
+- **Locks / rank:** single-threaded, so no locks; IPC rank 10 (AGENTS.md 14.5).
